@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ghcr.io/anacondakc/aniu
+  IMAGE_NAME: ghcr.io/Mustang0394/aniu
 
 jobs:
   build-and-push:
@@ -46,7 +46,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=Aniu
             org.opencontainers.image.description=AI simulated trading platform using the East Money Miaoxiang interface
-            org.opencontainers.image.source=https://github.com/AnacondaKC/Aniu
+            org.opencontainers.image.source=https://github.com/Mustang0394/Aniu
             org.opencontainers.image.licenses=MIT
 
       - name: Build and push image

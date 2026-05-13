@@ -3729,6 +3729,14 @@ textarea {
   gap: 16px;
 }
 
+.field-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+  color: #c8d8ec;
+}
+
 .settings-inline-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

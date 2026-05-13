@@ -1386,6 +1386,9 @@ class AniuService:
             messages=messages,
             timeout_seconds=1800,
             tool_context=build_skill_context(run_type="chat", app_settings=settings),
+            enable_reasoning_echo=getattr(
+                settings, "llm_enable_reasoning_content_echo", False
+            ),
         )
 
         return {
@@ -1422,6 +1425,9 @@ class AniuService:
             llm_model=settings.llm_model,
             llm_base_url=str(settings.llm_base_url),
             llm_api_key=str(settings.llm_api_key),
+            llm_enable_reasoning_content_echo=getattr(
+                settings, "llm_enable_reasoning_content_echo", False
+            ),
         )
 
         event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
@@ -1447,6 +1453,9 @@ class AniuService:
                     ),
                     emit=_emit,
                     cancel_event=cancel_event,
+                    enable_reasoning_echo=getattr(
+                        settings_snapshot, "llm_enable_reasoning_content_echo", False
+                    ),
                 )
                 _emit("completed", message=content)
             except LLMStreamCancelled:
@@ -1785,6 +1794,9 @@ class AniuService:
                 ),
                 "automation_context_source": getattr(
                     settings, "automation_context_source", "default"
+                ),
+                "llm_enable_reasoning_content_echo": getattr(
+                    settings, "llm_enable_reasoning_content_echo", False
                 ),
             }
         return run_id, settings_snapshot

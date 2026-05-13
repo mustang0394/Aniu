@@ -715,6 +715,9 @@ class ChatSessionService:
                 llm_model=settings.llm_model,
                 llm_base_url=str(settings.llm_base_url),
                 llm_api_key=str(settings.llm_api_key),
+                llm_enable_reasoning_content_echo=getattr(
+                    settings, "llm_enable_reasoning_content_echo", False
+                ),
             )
             session_id = session.id
 
@@ -740,6 +743,9 @@ class ChatSessionService:
                     ),
                     emit=_emit,
                     cancel_event=cancel_event,
+                    enable_reasoning_echo=getattr(
+                        settings_snapshot, "llm_enable_reasoning_content_echo", False
+                    ),
                 )
                 _emit("completed", message=content)
             except LLMStreamCancelled:

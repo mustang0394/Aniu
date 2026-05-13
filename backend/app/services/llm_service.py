@@ -237,6 +237,7 @@ class LLMService:
         tool_context: dict[str, Any] | None = None,
         emit: Any = None,
         cancel_event: threading.Event | None = None,
+        enable_reasoning_echo: bool = False,
     ) -> str:
         payload_messages: list[dict[str, Any]] = []
         effective_system_prompt = self._augment_system_prompt(
@@ -272,6 +273,7 @@ class LLMService:
             tool_executor=_chat_tool_executor,
             emit=emit,
             cancel_event=cancel_event,
+            enable_reasoning_echo=enable_reasoning_echo,
         )
         return result["final_answer"] or "模型本轮未返回可展示内容。"
 
@@ -385,6 +387,9 @@ class LLMService:
             timeout_seconds=getattr(app_settings, "timeout_seconds", 60),
             tool_executor=_run_tool_executor,
             emit=emit,
+            enable_reasoning_echo=getattr(
+                app_settings, "llm_enable_reasoning_content_echo", False
+            ),
         )
 
         return (
@@ -412,6 +417,7 @@ class LLMService:
         tool_executor: Callable[[str, dict[str, Any]], dict[str, Any]],
         emit: Any = None,
         cancel_event: threading.Event | None = None,
+        enable_reasoning_echo: bool = False,
     ) -> dict[str, Any]:
         _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
         messages: list[dict[str, Any]] = [dict(m) for m in initial_messages]
@@ -449,6 +455,8 @@ class LLMService:
             }
             if message.get("tool_calls"):
                 assistant_entry["tool_calls"] = message["tool_calls"]
+            if enable_reasoning_echo and message.get("reasoning_content"):
+                assistant_entry["reasoning_content"] = message["reasoning_content"]
             messages.append(assistant_entry)
 
             assistant_text = _to_text_content(message.get("content"))
@@ -628,6 +636,7 @@ class LLMService:
     ) -> dict[str, Any]:
         data_lines: list[str] = []
         content_parts: list[str] = []
+        reasoning_content_parts: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}
         usage: dict[str, Any] | None = None
         finish_reason: str | None = None
@@ -720,6 +729,10 @@ class LLMService:
                         final_started = True
                     emit("final_delta", delta=delta_text)
 
+            delta_reasoning = _to_stream_text_content(delta.get("reasoning_content"))
+            if delta_reasoning:
+                reasoning_content_parts.append(delta_reasoning)
+
         for raw_line in lines:
             _raise_if_cancelled(cancel_event)
             line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8")
@@ -740,6 +753,7 @@ class LLMService:
             _flush_payload("\n".join(data_lines))
 
         final_text = "".join(content_parts)
+        final_reasoning_text = "".join(reasoning_content_parts)
         if stream_mode != "tool":
             if not final_started:
                 emit("final_started", char_count=len(final_text))
@@ -750,6 +764,8 @@ class LLMService:
             "role": "assistant",
             "content": final_text,
         }
+        if final_reasoning_text:
+            message["reasoning_content"] = final_reasoning_text
         ordered_tool_calls = [tool_calls[idx] for idx in sorted(tool_calls)]
         if ordered_tool_calls:
             message["tool_calls"] = ordered_tool_calls

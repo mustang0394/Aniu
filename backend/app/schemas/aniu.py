@@ -26,6 +26,7 @@ class AppSettingsBase(BaseModel):
     automation_recent_message_limit: int = Field(default=24, ge=4, le=200)
     automation_enable_auto_compaction: bool = True
     automation_idle_summary_hours: int = Field(default=12, ge=1, le=168)
+    llm_enable_reasoning_content_echo: bool = False
 
 
 class AppSettingsRead(AppSettingsBase):

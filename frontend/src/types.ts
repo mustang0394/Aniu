@@ -6,6 +6,7 @@ export interface AppSettings {
   llm_api_key: string | null
   llm_model: string
   automation_context_window_tokens: number | null
+  llm_enable_reasoning_content_echo: boolean
   system_prompt: string
   created_at: string
   updated_at: string

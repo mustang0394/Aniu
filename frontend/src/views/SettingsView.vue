@@ -33,6 +33,21 @@
                 <p class="field-help">默认 128K。后端会按该值的 85% 作为自动化会话上下文压缩触发预算。</p>
               </label>
             </div>
+            <div class="field-toggle-row">
+              <span>回传思考内容</span>
+              <button
+                type="button"
+                class="skill-toggle"
+                :class="{ 'is-on': settings.llm_enable_reasoning_content_echo }"
+                role="switch"
+                :aria-checked="settings.llm_enable_reasoning_content_echo"
+                @click="settings.llm_enable_reasoning_content_echo = !settings.llm_enable_reasoning_content_echo"
+              >
+                <span class="skill-toggle-thumb" aria-hidden="true"></span>
+                {{ settings.llm_enable_reasoning_content_echo ? '启用' : '停用' }}
+              </button>
+            </div>
+            <p class="field-help">启用后，推理模型（如 DeepSeek-R1）返回的思考内容（reasoning_content）将在下次请求时回传，避免部分模型报 400 错误。</p>
             <label class="field">
               <span>妙想密钥</span>
               <input v-model="settings.mx_api_key" type="password" placeholder="妙想接口 apikey" />

@@ -93,6 +93,10 @@ def _ensure_app_settings_columns(engine) -> None:
         statements.append(
             "ALTER TABLE app_settings ADD COLUMN automation_context_detected_at DATETIME"
         )
+    if "llm_enable_reasoning_content_echo" not in columns:
+        statements.append(
+            "ALTER TABLE app_settings ADD COLUMN llm_enable_reasoning_content_echo BOOLEAN DEFAULT 0"
+        )
 
     if not statements:
         return

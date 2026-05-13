@@ -58,6 +58,7 @@ class AppSettings(Base):
         Boolean, default=True
     )
     automation_idle_summary_hours: Mapped[int] = mapped_column(Integer, default=12)
+    llm_enable_reasoning_content_echo: Mapped[bool] = mapped_column(Boolean, default=False)
     automation_context_source: Mapped[str | None] = mapped_column(
         String(32), nullable=True, default="default"
     )

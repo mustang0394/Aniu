@@ -74,6 +74,7 @@ def _build_trade_message(
     now = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
 
     action_emoji = {"BUY": "\U0001f7e2", "SELL": "\U0001f534"}
+    action_text = {"BUY": "买入", "SELL": "卖出"}
 
     lines = [
         "\U0001f4c8 <b>交易执行通知</b>",
@@ -81,12 +82,13 @@ def _build_trade_message(
     ]
     if schedule_name:
         lines.append(f"\U0001f4cb 任务: {schedule_name}")
-    lines.append(f"\U0001f3af 触发: {trigger_source} | 运行 #{run_id}")
+    lines.append(f"\U0001f3af 来源: {trigger_source} | 运行 #{run_id}")
     lines.append("")
 
     for order in trade_orders:
         action = str(order.get("action") or "").upper()
         emoji = action_emoji.get(action, "")
+        label = action_text.get(action, action)
         symbol = order.get("symbol") or "?"
         name = order.get("name") or ""
         quantity = order.get("quantity") or 0
@@ -95,12 +97,12 @@ def _build_trade_message(
 
         name_part = f" ({name})" if name else ""
         if price_type == "MARKET":
-            price_part = " @ 市价"
+            price_part = " 市价"
         elif price is not None:
-            price_part = f" @ {price:.2f}"
+            price_part = f" {price:.2f}元"
         else:
             price_part = ""
 
-        lines.append(f"{emoji} <b>{action}</b> {symbol}{name_part} x{quantity}{price_part}")
+        lines.append(f"{emoji} <b>{label}</b> {symbol}{name_part} x{quantity}{price_part}")
 
     return "\n".join(lines)

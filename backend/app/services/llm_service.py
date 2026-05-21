@@ -19,6 +19,17 @@ _CHAT_CONFIRMATION_APPEND_PROMPT = (
     "影响范围和潜在风险，并在得到用户明确确认后才能调用工具或执行操作；若未获得明确确认，"
     "只能提供方案、预览或建议，不得直接执行。"
 )
+_TRADE_ENFORCEMENT_PROMPT = (
+    "## 交易执行强制规则（trade 模式专属）\n"
+    "你当前处于交易（trade）模式，你必须实际执行交易操作，而不是仅仅在文本中讨论。\n"
+    "关键规则：\n"
+    "1. 当你经过分析判断需要买入某只股票时，必须调用 mx_moni_trade 工具（action=\"BUY\"）\n"
+    "2. 当你经过分析判断需要卖出某只股票时，必须调用 mx_moni_trade 工具（action=\"SELL\"）\n"
+    "3. 当你经过分析判断需要撤单时，必须调用 mx_moni_cancel 工具\n"
+    "4. 仅当你判断应该继续持有、不做任何操作时，才可以直接输出文本分析结论而不调用交易工具\n"
+    "5. 在文本中说"建议买入"、"应该卖出"、"可以建仓"等不会触发任何实际操作"
+    "——只有工具调用才会执行交易。如果你不调用函数，交易就不会发生。"
+)
 
 
 class LLMStreamCancelled(RuntimeError):
@@ -328,6 +339,8 @@ class LLMService:
             str(base_prompt or "").strip(),
             str(supplement or "").strip(),
         ]
+        if str(run_type or "").strip() == "trade":
+            prompt_parts.append(_TRADE_ENFORCEMENT_PROMPT)
         if str(run_type or "").strip() == "chat":
             prompt_parts.append(_CHAT_CONFIRMATION_APPEND_PROMPT)
         return "\n\n".join(part for part in prompt_parts if part)

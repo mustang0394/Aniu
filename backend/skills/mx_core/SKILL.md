@@ -1,6 +1,7 @@
 ---
 name: mx_core
 description: 东方财富妙想股票行情、资讯、选股与A股模拟交易核心工具集
+always: true
 metadata:
   aniu:
     handler_module: skills.mx_core.handler
@@ -25,3 +26,13 @@ metadata:
 
 - 数量必须是 100 的整数倍；LIMIT 委托必须附带有效价格。
 - 撤单优先按委托编号，撤单前建议先 `mx_get_orders` 查到最新 order_id。
+
+## 交易执行铁律
+
+当你处于 trade 模式时，以下规则不可违反：
+
+1. **判断买入 → 必须调用 `mx_moni_trade`（action="BUY"）函数**
+2. **判断卖出 → 必须调用 `mx_moni_trade`（action="SELL"）函数**
+3. **判断撤单 → 必须调用 `mx_moni_cancel` 函数**
+4. 只在文本中说"建议买入"、"应该卖出"而不调用函数 = 交易不会发生，这等于是失职
+5. 仅当判断应该继续持有、不做操作时，才可以在不调用交易工具的情况下直接输出结论

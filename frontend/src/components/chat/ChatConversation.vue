@@ -2,6 +2,17 @@
   <section class="chat-conversation">
     <header class="chat-conversation-head">
       <div class="chat-conversation-title-wrap">
+        <button
+          v-if="showSidebarToggle"
+          type="button"
+          class="chat-mobile-open-sidebar"
+          aria-label="打开会话列表"
+          @click="$emit('openSidebar')"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
         <h3 class="chat-conversation-title">{{ title }}</h3>
 
         <span v-if="session" class="chat-conversation-meta">
@@ -82,6 +93,7 @@ const props = defineProps<{
   readOnly?: boolean
   ensureSessionReady: () => Promise<number | null>
   loadOlderMessages: () => Promise<void>
+  showSidebarToggle?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -90,6 +102,7 @@ const emit = defineEmits<{
   (e: 'attach', attachment: ChatAttachment): void
   (e: 'remove-attachment', id: number): void
   (e: 'upload-error', message: string): void
+  (e: 'openSidebar'): void
 }>()
 
 const scrollRef = ref<HTMLElement | null>(null)

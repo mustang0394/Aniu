@@ -112,7 +112,7 @@
                 </div>
               </div>
 
-              <div class="positions-grid-body">
+              <div class="positions-grid-body desktop-table">
                 <div class="positions-grid-row" v-for="pos in displayPositions" :key="pos.symbol">
                   <div class="positions-grid-cell positions-grid-cell-primary">
                     <div class="position-cell-main">
@@ -148,6 +148,27 @@
                   <div class="positions-grid-cell">{{ getPositionRatioText(pos.position_ratio) }}</div>
                 </div>
               </div>
+
+              <div class="mobile-cards" v-if="displayPositions.length">
+                <article class="position-card" v-for="pos in displayPositions" :key="`mc-${pos.symbol}`">
+                  <header class="position-card-head">
+                    <strong class="position-name">{{ pos.name }}</strong>
+                    <span class="position-symbol">{{ pos.symbol }}</span>
+                  </header>
+                  <dl class="position-card-grid">
+                    <div><dt>持仓市值</dt><dd>{{ formatMoney(pos.amount) }}</dd></div>
+                    <div><dt>仓位占比</dt><dd>{{ getPositionRatioText(pos.position_ratio) }}</dd></div>
+                    <div><dt>持仓股数</dt><dd>{{ formatVolume(pos.volume) }}</dd></div>
+                    <div><dt>可卖股数</dt><dd>{{ formatVolume(pos.available_volume) }}</dd></div>
+                    <div><dt>当日盈亏</dt><dd :class="profitClass(pos.day_profit)">{{ formatSignedMoney(pos.day_profit) }}</dd></div>
+                    <div><dt>当日收益率</dt><dd :class="profitClass(pos.day_profit_ratio)">{{ formatPercent(pos.day_profit_ratio) }}</dd></div>
+                    <div><dt>总盈亏</dt><dd :class="profitClass(pos.profit)">{{ formatSignedMoney(pos.profit) }}</dd></div>
+                    <div><dt>总收益率</dt><dd :class="profitClass(pos.profit_ratio)">{{ formatPercent(pos.profit_ratio) }}</dd></div>
+                    <div><dt>当前价</dt><dd>{{ formatMoney(pos.current_price) }}</dd></div>
+                    <div><dt>成本价</dt><dd>{{ formatMoney(pos.cost_price) }}</dd></div>
+                  </dl>
+                </article>
+              </div>
             </div>
             <div v-else class="empty-state">
               <p>{{ errorMessage || '账户接口暂未返回真实持仓数据。请检查后端账户接口或先执行一次任务刷新账户快照。' }}</p>
@@ -177,7 +198,7 @@
                 </div>
               </div>
 
-              <div class="positions-grid-body">
+              <div class="positions-grid-body desktop-table">
                 <div class="trade-grid-row" v-for="trade in displayTradeSummaries" :key="`${trade.symbol}-${trade.closed_at || '--'}`">
                   <div class="positions-grid-cell positions-grid-cell-primary">
                     <div class="position-cell-main">
@@ -208,6 +229,26 @@
                   </div>
                 </div>
               </div>
+
+              <div class="mobile-cards" v-if="displayTradeSummaries.length">
+                <article class="trade-card" v-for="trade in displayTradeSummaries" :key="`mc-${trade.symbol}-${trade.closed_at || '--'}`">
+                  <header class="position-card-head">
+                    <strong class="position-name">{{ trade.name }}</strong>
+                    <span class="position-symbol">{{ trade.symbol }}</span>
+                  </header>
+                  <dl class="position-card-grid">
+                    <div><dt>买入时间</dt><dd>{{ formatMinuteTime(trade.opened_at) }}</dd></div>
+                    <div><dt>卖出时间</dt><dd>{{ formatMinuteTime(trade.closed_at) }}</dd></div>
+                    <div><dt>成交股数</dt><dd>{{ formatVolume(trade.volume) }}</dd></div>
+                    <div><dt>收益</dt><dd :class="profitClass(trade.profit)">{{ formatSignedMoney(trade.profit) }}</dd></div>
+                    <div><dt>收益率</dt><dd :class="profitClass(trade.profit_ratio)">{{ formatPercent(trade.profit_ratio) }}</dd></div>
+                    <div><dt>卖出均价</dt><dd>{{ formatMoney(trade.sell_price) }}</dd></div>
+                    <div><dt>买入均价</dt><dd>{{ formatMoney(trade.buy_price) }}</dd></div>
+                    <div><dt>卖出金额</dt><dd>{{ formatMoney(trade.sell_amount) }}</dd></div>
+                    <div><dt>买入金额</dt><dd>{{ formatMoney(trade.buy_amount) }}</dd></div>
+                  </dl>
+                </article>
+              </div>
             </div>
             <div v-else class="empty-state">
               <p>当前还没有可展示的完整交易闭环。买入后全部卖出的股票会展示在这里。</p>
@@ -236,7 +277,7 @@
                 </div>
               </div>
 
-              <div class="positions-grid-body">
+              <div class="positions-grid-body desktop-table">
                 <div class="orders-grid-row" v-for="order in displayOrders" :key="order.order_id">
                   <div class="positions-grid-cell positions-grid-cell-primary">
                     <div class="position-cell-main">
@@ -268,6 +309,24 @@
                     </span>
                   </div>
                 </div>
+              </div>
+
+              <div class="mobile-cards" v-if="displayOrders.length">
+                <article class="order-card" v-for="order in displayOrders" :key="`mc-${order.order_id}`">
+                  <header class="position-card-head">
+                    <strong class="position-name">{{ order.name }}</strong>
+                    <span class="position-symbol">{{ order.symbol }}</span>
+                    <span class="order-side" :class="order.side === 'buy' ? 'profit-up' : 'profit-down'">{{ order.side_text }}</span>
+                  </header>
+                  <dl class="position-card-grid">
+                    <div><dt>委托时间</dt><dd>{{ order.order_time || '--' }}</dd></div>
+                    <div><dt>委托状态</dt><dd><span class="order-status" :class="getOrderStatusClass(order.status_text)">{{ order.status_text || '--' }}</span></dd></div>
+                    <div><dt>委托价格</dt><dd>{{ formatMoney(order.order_price) }}</dd></div>
+                    <div><dt>委托数量</dt><dd>{{ formatVolume(order.order_quantity) }}</dd></div>
+                    <div><dt>成交价格</dt><dd>{{ formatMoney(order.filled_price) }}</dd></div>
+                    <div><dt>成交数量</dt><dd>{{ formatVolume(order.filled_quantity) }}</dd></div>
+                  </dl>
+                </article>
               </div>
             </div>
             <div v-else class="empty-state">

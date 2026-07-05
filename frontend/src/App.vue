@@ -36,13 +36,26 @@
     </div>
 
     <div v-if="!isLoginPage" class="tabs-container">
-      <nav class="app-header-nav">
+      <button
+        type="button"
+        class="nav-toggle"
+        :class="{ 'is-open': mobileNavOpen }"
+        :aria-expanded="mobileNavOpen"
+        aria-label="切换导航菜单"
+        @click="mobileNavOpen = !mobileNavOpen"
+      >
+        <span class="nav-toggle-bar"></span>
+        <span class="nav-toggle-bar"></span>
+        <span class="nav-toggle-bar"></span>
+      </button>
+      <nav class="app-header-nav" :class="{ 'is-open': mobileNavOpen }">
         <router-link
           v-for="tab in appNavigation"
           :key="tab.id"
           :to="'/' + tab.id"
           class="tab-button"
           active-class="active"
+          @click="mobileNavOpen = false"
         >
           {{ tab.name }}
         </router-link>
@@ -56,7 +69,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import appPackage from '../package.json'
@@ -74,8 +87,14 @@ const router = useRouter()
 const route = useRoute()
 const { errorMessage } = storeToRefs(store)
 const appVersion = appPackage.version
+const mobileNavOpen = ref(false)
 
 const isLoginPage = computed(() => route.path === '/login')
+
+// 路由切换后收起移动端菜单
+router.afterEach(() => {
+  mobileNavOpen.value = false
+})
 
 function handleLogout() {
   clearStoredToken()

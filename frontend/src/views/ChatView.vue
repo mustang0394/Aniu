@@ -9,17 +9,25 @@
       </div>
 
       <div class="chat-workspace">
-        <ChatSessionSidebar
-          :sessions="sessions"
-          :persistent-session="persistentSession"
-          :persistent-selected="persistentSelected"
-          :current-session-id="currentSessionId"
-          :loading="sessionsLoading"
-          @select="handleSelect"
-          @select-persistent="handleSelectPersistent"
-          @create="handleCreate"
-          @delete="handleDelete"
-        />
+        <div
+          class="chat-sidebar-backdrop"
+          :class="{ 'is-open': sidebarOpen }"
+          @click="sidebarOpen = false"
+          aria-hidden="true"
+        ></div>
+        <div class="chat-sidebar-wrap" :class="{ 'is-open': sidebarOpen }">
+          <ChatSessionSidebar
+            :sessions="sessions"
+            :persistent-session="persistentSession"
+            :persistent-selected="persistentSelected"
+            :current-session-id="currentSessionId"
+            :loading="sessionsLoading"
+            @select="handleSelect"
+            @select-persistent="handleSelectPersistent"
+            @create="handleCreate"
+            @delete="handleDelete"
+          />
+        </div>
 
         <ChatConversation
           :session="persistentSelected ? persistentSession : currentSession"
@@ -35,10 +43,12 @@
           :read-only="persistentSelected"
           :ensure-session-ready="ensureSessionReady"
           :load-older-messages="persistentSelected ? loadOlderPersistentMessages : loadOlderMessages"
+          :show-sidebar-toggle="true"
           @submit="handleSubmit"
           @attach="addAttachment"
           @remove-attachment="removeAttachment"
           @upload-error="handleUploadError"
+          @open-sidebar="sidebarOpen = true"
         />
       </div>
     </section>
@@ -103,6 +113,7 @@ const runStream = useRunStream()
 
 const skipNextSessionLoad = ref(false)
 const persistentSelected = ref(false)
+const sidebarOpen = ref(false)
 const DEFAULT_SESSION_TITLE = '\u65b0\u5bf9\u8bdd'
 const DEFAULT_SESSION_TITLES = new Set([DEFAULT_SESSION_TITLE, '\u65b0\u4f1a\u8bdd'])
 
@@ -167,12 +178,14 @@ watch(currentSessionId, async (sessionId) => {
 function handleSelect(sessionId: number) {
   persistentSelected.value = false
   selectSession(sessionId)
+  sidebarOpen.value = false
 }
 
 async function handleSelectPersistent() {
   persistentSelected.value = true
   activeSessionId.value = null
   await loadPersistentSession()
+  sidebarOpen.value = false
 }
 
 async function ensureSessionReady(): Promise<number | null> {

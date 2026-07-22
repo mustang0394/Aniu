@@ -283,8 +283,8 @@
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--label-tertiary);
+  letter-spacing: 0.06em;
+  color: var(--label-secondary);
 }
 
 .chat-session-summary-content {
@@ -980,10 +980,12 @@
 }
 
 .runtime-section {
-  padding: 14px;
-  background: var(--bg-fill);
-  border-radius: 10px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  padding: 14px 14px 14px 16px;
+  background: var(--bg-card-solid);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator);
+  box-shadow: var(--shadow-sm);
+  border-left: 3px solid var(--accent);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -991,11 +993,10 @@
 
 .runtime-title {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--label-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  color: var(--accent-text);
+  letter-spacing: 0.02em;
 }
 
 .runtime-stats {
@@ -1015,6 +1016,7 @@
   min-height: 74px;
   padding: 24px 10px 8px;
   background: var(--bg-fill);
+  border: 1px solid var(--separator);
   border-radius: 8px;
   box-sizing: border-box;
 }
@@ -1024,7 +1026,7 @@
   top: 8px;
   left: 10px;
   font-size: 10px;
-  color: var(--label-quaternary);
+  color: var(--label-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   text-align: left;
@@ -1073,28 +1075,33 @@
   gap: 3px;
   min-width: 0;
   padding: 8px 10px;
-  background: rgba(0, 122, 255, 0.08);
-  border: 1px solid rgba(0, 122, 255, 0.12);
+  background: var(--accent-soft);
+  border: 1px solid rgba(0, 122, 255, 0.18);
   border-radius: 999px;
   overflow: hidden;
 }
 
 .runtime-token-item-total {
-  background: rgba(52, 199, 89, 0.12);
-  border-color: rgba(52, 199, 89, 0.16);
+  background: var(--success-soft);
+  border-color: rgba(52, 199, 89, 0.22);
 }
 
+/* 与输入/输出保持同一套浅蓝语义，避免灰胶囊被背景吞掉 */
 .runtime-token-item-muted {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: rgba(0, 0, 0, 0.05);
+  background: var(--accent-soft);
+  border-color: rgba(0, 122, 255, 0.18);
 }
 
 .runtime-token-bar .token-label {
   font-size: 10px;
-  color: var(--label-tertiary);
+  color: var(--accent-text);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   text-align: center;
+}
+
+.runtime-token-item-total .token-label {
+  color: var(--success-text);
 }
 
 .runtime-token-bar .token-value {
@@ -1227,9 +1234,9 @@
 .label-text {
   font-size: 11px;
   font-weight: 600;
-  color: var(--label-tertiary);
+  color: var(--label-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
 }
 
 .run-summary-text {
@@ -1832,9 +1839,10 @@
 
 .date-picker .field span {
   font-size: 12px;
-  color: var(--label-tertiary);
+  font-weight: 600;
+  color: var(--label-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
 }
 
 .date-picker input[type="date"] {
@@ -1962,10 +1970,10 @@
 
 .field-label {
   font-size: 11px;
-  font-weight: 500;
-  color: var(--label-tertiary);
+  font-weight: 600;
+  color: var(--label-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
 }
 
 .field-label small {
@@ -2092,11 +2100,11 @@
 .input-label {
   display: block;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--label-tertiary);
+  font-weight: 600;
+  color: var(--label-secondary);
   margin-bottom: 8px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
 }
 
 .input-label small {
@@ -2421,10 +2429,11 @@
 .schedule-label {
   display: block;
   font-size: 11px;
-  color: var(--label-tertiary);
+  font-weight: 600;
+  color: var(--label-secondary);
   margin-bottom: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
 }
 
 .schedule-badges {
@@ -2453,11 +2462,11 @@
 .prompt-label {
   display: block;
   font-size: 11px;
-  font-weight: 500;
-  color: var(--label-tertiary);
+  font-weight: 600;
+  color: var(--label-secondary);
   margin-bottom: 8px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
 }
 
 .prompt-label small {

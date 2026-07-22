@@ -25,11 +25,11 @@
   --bg-hover: rgba(0, 0, 0, 0.04);
   --bg-active: rgba(0, 0, 0, 0.07);
 
-  /* —— 文字层级（Apple label 体系，对浅色底对比度 ≥4.5:1） —— */
+  /* —— 文字层级（Apple label 体系；secondary/tertiary 略加深以保证浅色底可读） —— */
   --label-primary: #1d1d1f;
-  --label-secondary: rgba(60, 60, 67, 0.72);
-  --label-tertiary: rgba(60, 60, 67, 0.5);
-  --label-quaternary: rgba(60, 60, 67, 0.32);
+  --label-secondary: rgba(60, 60, 67, 0.8);
+  --label-tertiary: rgba(60, 60, 67, 0.62);
+  --label-quaternary: rgba(60, 60, 67, 0.42);
   --label-on-accent: #ffffff;
 
   /* —— 分隔线（浅色用低透明度黑） —— */

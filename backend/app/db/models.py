@@ -66,6 +66,8 @@ class AppSettings(Base):
     tg_bot_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tg_chat_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tg_notify_trade_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    capital_seal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    capital_seal_amount: Mapped[float] = mapped_column(Float, default=0.0)
     automation_context_source: Mapped[str | None] = mapped_column(
         String(32), nullable=True, default="default"
     )

@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from skills.mx_core.client import MXClient
+from skills.mx_core.capital_seal import (
+    apply_seal_to_balance_payload,
+    check_buy_against_virtual_cash,
+    extract_virtual_cash_from_balance_payload,
+    get_seal_config,
+)
 from skills.mx_core.markets import (
     MARKET_LABELS,
     append_market_constraint_to_query,
@@ -142,13 +148,30 @@ class MXExecutionService:
     def _handle_get_balance(
         self, *, client: MXClient, app_settings: Any, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        del app_settings, arguments
+        del arguments
         result = client.get_balance()
+        enabled, seal = get_seal_config(app_settings)
+        projected = apply_seal_to_balance_payload(
+            result if isinstance(result, dict) else None,
+            seal_amount=seal,
+            enabled=enabled,
+        )
+        summary = "已查询账户资金。"
+        if enabled and isinstance(projected, dict):
+            meta = projected.get("_aniu_capital_seal") or {}
+            virtual_total = meta.get("virtual_total_assets")
+            virtual_cash = meta.get("virtual_cash_balance")
+            parts = [f"已按资金封印（{seal:.2f} 元）投影为可操作口径"]
+            if virtual_total is not None:
+                parts.append(f"虚拟总资产 {float(virtual_total):.2f}")
+            if virtual_cash is not None:
+                parts.append(f"虚拟可用 {float(virtual_cash):.2f}")
+            summary = "，".join(parts) + "。"
         return {
             "ok": True,
             "tool_name": "mx_get_balance",
-            "summary": "已查询账户资金。",
-            "result": result,
+            "summary": summary,
+            "result": projected if projected is not None else result,
         }
 
     def _handle_get_orders(
@@ -237,6 +260,35 @@ class MXExecutionService:
                     "allowed_markets": normalize_allowed_markets(allowed_markets),
                     "market": market,
                 }
+
+            seal_enabled, seal_amount = get_seal_config(app_settings)
+            if seal_enabled:
+                virtual_cash: float | None = None
+                try:
+                    balance_payload = client.get_balance()
+                    sealed = apply_seal_to_balance_payload(
+                        balance_payload if isinstance(balance_payload, dict) else None,
+                        seal_amount=seal_amount,
+                        enabled=True,
+                    )
+                    virtual_cash = extract_virtual_cash_from_balance_payload(sealed)
+                except Exception:
+                    virtual_cash = None
+                cash_ok, cash_error = check_buy_against_virtual_cash(
+                    app_settings=app_settings,
+                    virtual_cash=virtual_cash,
+                    quantity=quantity,
+                    price=float(price) if price is not None else None,
+                    price_type=price_type,
+                )
+                if not cash_ok:
+                    return {
+                        "ok": False,
+                        "tool_name": "mx_moni_trade",
+                        "error": cash_error or "超出虚拟可用资金，拒绝买入。",
+                        "capital_seal_amount": seal_amount,
+                        "virtual_cash_balance": virtual_cash,
+                    }
 
         result = client.trade(
             action=action,

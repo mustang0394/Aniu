@@ -99,6 +99,35 @@
                 勾选允许选股与买入的市场。买入会按代码硬拦截；卖出/撤单不受限制，便于清理历史持仓。默认仅上证/深证 A 股。
               </p>
             </div>
+            <div class="field-toggle-row">
+              <span>资金封印</span>
+              <button
+                type="button"
+                class="skill-toggle"
+                :class="{ 'is-on': settings.capital_seal_enabled }"
+                role="switch"
+                :aria-checked="settings.capital_seal_enabled"
+                :disabled="busy"
+                @click="settings.capital_seal_enabled = !settings.capital_seal_enabled"
+              >
+                <span class="skill-toggle-thumb" aria-hidden="true"></span>
+                {{ settings.capital_seal_enabled ? '启用' : '停用' }}
+              </button>
+            </div>
+            <label class="field">
+              <span>封印金额（元）</span>
+              <input
+                v-model.number="settings.capital_seal_amount"
+                type="number"
+                min="0"
+                step="1000"
+                placeholder="例如 900000"
+                :disabled="busy || !settings.capital_seal_enabled"
+              />
+              <p class="field-help">
+                从模拟户中划出不可用于策略的资金。工具返回的总资产/可用资金/仓位与收益统计均按「真实值 − 封印」投影；持仓明细不减。盈利会推高可操作本金。买入不得超过虚拟可用资金。
+              </p>
+            </label>
           </div>
           <div class="settings-right">
             <label class="field">

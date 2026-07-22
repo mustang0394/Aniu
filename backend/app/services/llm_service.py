@@ -8,6 +8,7 @@ import httpx
 
 from app.skills.providers import build_skill_context
 from skills.mx_core.client import MXClient
+from skills.mx_core.capital_seal import build_capital_seal_prompt
 from skills.mx_core.markets import (
     build_allowed_markets_prompt,
     get_allowed_markets_from_settings,
@@ -347,10 +348,12 @@ class LLMService:
         market_prompt = build_allowed_markets_prompt(
             get_allowed_markets_from_settings(app_settings)
         )
+        seal_prompt = build_capital_seal_prompt(app_settings)
         prompt_parts = [
             str(base_prompt or "").strip(),
             str(supplement or "").strip(),
             str(market_prompt or "").strip(),
+            str(seal_prompt or "").strip(),
         ]
         if str(run_type or "").strip() == "trade":
             prompt_parts.append(_TRADE_ENFORCEMENT_PROMPT)

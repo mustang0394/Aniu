@@ -1234,6 +1234,86 @@ class AniuService:
                 return payload
         return None
 
+    def _project_balance_result(
+        self,
+        balance_result: dict[str, Any] | None,
+        *,
+        app_settings: Any,
+    ) -> dict[str, Any] | None:
+        """Seal balance payload once so overview/chat share agent operable funds."""
+        if not isinstance(balance_result, dict):
+            return balance_result
+        from skills.mx_core.capital_seal import apply_seal_to_balance_payload, get_seal_config
+
+        enabled, seal = get_seal_config(app_settings)
+        projected = apply_seal_to_balance_payload(
+            balance_result,
+            seal_amount=seal,
+            enabled=enabled,
+        )
+        return projected if isinstance(projected, dict) else balance_result
+
+    def _stamp_overview_capital_seal(
+        self,
+        overview: dict[str, Any],
+        balance_result: dict[str, Any] | None,
+        *,
+        app_settings: Any,
+    ) -> dict[str, Any]:
+        from skills.mx_core.capital_seal import get_seal_config
+
+        enabled, seal = get_seal_config(app_settings)
+        if not enabled or not isinstance(overview, dict):
+            return overview
+        meta = None
+        if isinstance(balance_result, dict):
+            raw_meta = balance_result.get("_aniu_capital_seal")
+            if isinstance(raw_meta, dict):
+                meta = dict(raw_meta)
+        if meta is None:
+            meta = {
+                "applied": True,
+                "seal_amount": seal,
+                "real_total_assets": None,
+                "real_cash_balance": None,
+                "virtual_total_assets": overview.get("total_assets"),
+                "virtual_cash_balance": overview.get("cash_balance"),
+                "seal_breached": False,
+            }
+        overview = dict(overview)
+        overview["capital_seal"] = {
+            **meta,
+            "enabled": True,
+            "seal_amount": seal,
+        }
+        return overview
+
+    def _finalize_account_overview(
+        self,
+        *,
+        balance_result: dict[str, Any] | None,
+        positions_result: dict[str, Any] | None,
+        orders_result: dict[str, Any] | None,
+        errors: list[str],
+        include_raw: bool,
+        app_settings: Any,
+    ) -> dict[str, Any]:
+        projected_balance = self._project_balance_result(
+            balance_result, app_settings=app_settings
+        )
+        overview = self._build_account_response(
+            balance_result=projected_balance,
+            positions_result=positions_result,
+            orders_result=orders_result,
+            errors=errors,
+            include_raw=include_raw,
+        )
+        return self._stamp_overview_capital_seal(
+            overview,
+            projected_balance if isinstance(projected_balance, dict) else None,
+            app_settings=app_settings,
+        )
+
     def get_account_overview(
         self,
         *,
@@ -1273,23 +1353,24 @@ class AniuService:
                     and positions_result is None
                     and orders_result is None
                 ):
-                    return self._build_account_response(
+                    return self._finalize_account_overview(
                         balance_result=None,
                         positions_result=None,
                         orders_result=None,
                         errors=[str(exc)],
                         include_raw=include_raw,
+                        app_settings=settings,
                     )
 
                 errors.append(f"{str(exc)}，当前展示最近一次任务缓存的账户数据。")
-                overview = self._build_account_response(
+                return self._finalize_account_overview(
                     balance_result=balance_result,
                     positions_result=positions_result,
                     orders_result=orders_result,
                     errors=errors,
                     include_raw=include_raw,
+                    app_settings=settings,
                 )
-                return overview
 
         try:
             if client is not None:
@@ -1344,32 +1425,36 @@ class AniuService:
                 and positions_result is None
                 and orders_result is None
             ):
-                return self._build_account_response(
+                return self._finalize_account_overview(
                     balance_result=None,
                     positions_result=None,
                     orders_result=None,
                     errors=errors
                     or ["未配置 MX API Key，且没有可用缓存账户数据。"],
                     include_raw=include_raw,
+                    app_settings=settings,
                 )
         finally:
             if client is not None:
                 client.close()
 
-        overview = self._build_account_response(
+        overview = self._finalize_account_overview(
             balance_result=balance_result,
             positions_result=positions_result,
             orders_result=orders_result,
             errors=errors,
             include_raw=include_raw,
+            app_settings=settings,
         )
+        # Cache sealed overview so chat tools and UI share the same operable funds.
         self._set_cached_account_overview(
-            self._build_account_response(
+            self._finalize_account_overview(
                 balance_result=balance_result,
                 positions_result=positions_result,
                 orders_result=orders_result,
                 errors=errors,
-                include_raw=True,
+                include_raw=False,
+                app_settings=settings,
             )
         )
         return overview
@@ -1815,6 +1900,12 @@ class AniuService:
                 "allowed_markets": get_allowed_markets_from_settings(settings),
                 "allowed_markets_json": getattr(
                     settings, "allowed_markets_json", None
+                ),
+                "capital_seal_enabled": bool(
+                    getattr(settings, "capital_seal_enabled", False)
+                ),
+                "capital_seal_amount": float(
+                    getattr(settings, "capital_seal_amount", 0) or 0
                 ),
             }
         return run_id, settings_snapshot

@@ -38,6 +38,8 @@ class AppSettingsBase(BaseModel):
     tg_bot_token: str | None = Field(default=None, max_length=512)
     tg_chat_id: str | None = Field(default=None, max_length=512)
     tg_notify_trade_enabled: bool = False
+    capital_seal_enabled: bool = False
+    capital_seal_amount: float = Field(default=0.0, ge=0)
     allowed_markets: list[MarketKey] = Field(
         default_factory=lambda: list(DEFAULT_ALLOWED_MARKETS),
         min_length=1,
@@ -47,6 +49,15 @@ class AppSettingsBase(BaseModel):
     @classmethod
     def _normalize_allowed_markets(cls, value: Any) -> list[str]:
         return normalize_allowed_markets(value)
+
+    @field_validator("capital_seal_amount", mode="before")
+    @classmethod
+    def _normalize_capital_seal_amount(cls, value: Any) -> float:
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return amount if amount > 0 else 0.0
 
 
 class AppSettingsRead(AppSettingsBase):
@@ -109,6 +120,12 @@ class AppSettingsRead(AppSettingsBase):
             "tg_chat_id": getattr(data, "tg_chat_id", None),
             "tg_notify_trade_enabled": getattr(
                 data, "tg_notify_trade_enabled", False
+            ),
+            "capital_seal_enabled": bool(
+                getattr(data, "capital_seal_enabled", False)
+            ),
+            "capital_seal_amount": float(
+                getattr(data, "capital_seal_amount", 0) or 0
             ),
             "allowed_markets": markets,
             "created_at": getattr(data, "created_at"),
@@ -385,6 +402,7 @@ class AccountOverviewRead(BaseModel):
     orders: list[OrderOverviewRead] = Field(default_factory=list)
     trade_summaries: list[TradeSummaryRead] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    capital_seal: dict[str, Any] | None = None
 
 
 class AccountOverviewDebugRead(AccountOverviewRead):

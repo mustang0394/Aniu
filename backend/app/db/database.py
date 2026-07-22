@@ -110,6 +110,14 @@ def _ensure_app_settings_columns(engine) -> None:
             "ALTER TABLE app_settings ADD COLUMN allowed_markets_json TEXT "
             "DEFAULT '[\"sh_main\",\"sz_main\"]'"
         )
+    if "capital_seal_enabled" not in columns:
+        statements.append(
+            "ALTER TABLE app_settings ADD COLUMN capital_seal_enabled BOOLEAN DEFAULT 0"
+        )
+    if "capital_seal_amount" not in columns:
+        statements.append(
+            "ALTER TABLE app_settings ADD COLUMN capital_seal_amount FLOAT DEFAULT 0"
+        )
 
     if not statements:
         return
@@ -130,7 +138,9 @@ def _ensure_app_settings_columns(engine) -> None:
                 "allowed_markets_json = COALESCE("
                 "NULLIF(trim(allowed_markets_json), ''), "
                 "'[\"sh_main\",\"sz_main\"]'"
-                ")"
+                "), "
+                "capital_seal_enabled = COALESCE(capital_seal_enabled, 0), "
+                "capital_seal_amount = COALESCE(capital_seal_amount, 0)"
             )
         )
 

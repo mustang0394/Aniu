@@ -12,6 +12,8 @@ export interface AppSettings {
   tg_bot_token: string | null
   tg_chat_id: string | null
   tg_notify_trade_enabled: boolean
+  capital_seal_enabled: boolean
+  capital_seal_amount: number
   allowed_markets: MarketKey[]
   system_prompt: string
   created_at: string

@@ -1,0 +1,388 @@
+/* =============================================================
+   mobile.css — 移动端响应式段落（从 style.css 拆出，最后引入以覆盖桌面规则）
+   ============================================================= */
+/* =============================================================
+   移动端访问兼容（新增段落，不修改上方任何现有规则）
+   桌面端（>960px）行为零变化；窄屏通过媒体查询覆盖。
+   ============================================================= */
+
+/* —— 桌面/移动分支显隐（OverviewView 表格卡片化） —— */
+.mobile-cards {
+  display: none;
+}
+
+.desktop-table {
+  display: block;
+}
+
+/* —— 顶部导航汉堡按钮（桌面隐藏） —— */
+.nav-toggle {
+  display: none;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  border-radius: 12px;
+  background: var(--bg-fill);
+  cursor: pointer;
+}
+
+.nav-toggle-bar {
+  display: block;
+  width: 22px;
+  height: 2px;
+  background: var(--label-secondary);
+  border-radius: 1px;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.nav-toggle.is-open .nav-toggle-bar:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+
+.nav-toggle.is-open .nav-toggle-bar:nth-child(2) {
+  opacity: 0;
+}
+
+.nav-toggle.is-open .nav-toggle-bar:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+/* —— Chat 移动端抽屉按钮与遮罩（桌面隐藏） —— */
+.chat-mobile-open-sidebar {
+  display: none;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  background: var(--bg-fill);
+  color: var(--label-secondary);
+  cursor: pointer;
+}
+
+.chat-mobile-open-sidebar svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.chat-sidebar-backdrop {
+  display: none;
+}
+
+/* —— 平板及小屏通用：运行网格降列 —— */
+@media (max-width: 720px) {
+  .run-grid,
+  .schedule-overview-list {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .run-card {
+    min-height: 64px;
+    padding: 12px 8px;
+  }
+
+  .run-card-type {
+    font-size: 12px;
+  }
+
+  .run-card-time {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 480px) {
+  .run-grid,
+  .schedule-overview-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* —— 手机断点：≤720px 主改造 —— */
+@media (max-width: 720px) {
+  /* 表格 → 卡片显隐切换 */
+  .desktop-table {
+    display: none;
+  }
+
+  .mobile-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* 移除持仓/交易/委托面板的固定高度硬约束 */
+  .positions-panel,
+  .orders-panel,
+  .trade-summary-panel {
+    min-height: auto;
+    height: auto;
+  }
+
+  .positions-surface {
+    height: auto;
+  }
+
+  .position-card,
+  .trade-card,
+  .order-card {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--bg-card-solid);
+    border: 1px solid var(--separator);
+  }
+
+  .position-card-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  }
+
+  .position-card-head .position-name {
+    font-size: 16px;
+  }
+
+  .position-card-head .order-side {
+    margin-left: auto;
+  }
+
+  .position-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+    margin: 0;
+  }
+
+  .position-card-grid > div {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .position-card-grid dt {
+    margin: 0;
+    font-size: 11px;
+    color: var(--label-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .position-card-grid dd {
+    margin: 0;
+    font-size: 14px;
+    color: var(--label-primary);
+    font-weight: 600;
+    word-break: break-word;
+  }
+
+  /* 顶部导航：汉堡菜单展开/收起 */
+  .nav-toggle {
+    display: inline-flex;
+  }
+
+  .tabs-container {
+    margin-top: 20px;
+    margin-bottom: 20px;
+  }
+
+  .app-header-nav {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    padding: 0 6px;
+    transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.2s ease;
+  }
+
+  .app-header-nav.is-open {
+    max-height: 360px;
+    opacity: 1;
+    padding: 6px;
+  }
+
+  .tab-button {
+    flex: 0 0 auto;
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 16px;
+    text-align: left;
+  }
+
+  /* Chat 抽屉：会话列表从左侧拉出 */
+  .chat-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-sidebar-backdrop.is-open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: var(--material-overlay-bg);
+    z-index: 25;
+  }
+
+  .chat-sidebar-wrap {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(86vw, 320px);
+    z-index: 30;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    background: var(--bg-card-solid);
+    padding: 12px;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.18);
+  }
+
+  .chat-sidebar-wrap.is-open {
+    transform: translateX(0);
+  }
+
+  .chat-sidebar-wrap .chat-session-sidebar {
+    height: 100%;
+    max-height: 100%;
+    border: none;
+    background: transparent;
+  }
+
+  .chat-mobile-open-sidebar {
+    display: inline-flex;
+  }
+
+  /* 输入框 ≥16px 防 iOS 自动放大 */
+  .field input,
+  .field textarea,
+  .chat-composer-input,
+  .chat-session-search-input,
+  .task-detail textarea,
+  .task-card-body textarea,
+  .run-prompt textarea,
+  .date-picker input[type="date"],
+  .run-control select,
+  .choice-chip {
+    font-size: 16px;
+  }
+
+  /* 触摸目标加大到 ≥44px */
+  .header-action-button {
+    height: 44px;
+    padding: 0 16px;
+  }
+
+  .chat-session-item {
+    padding: 12px 10px;
+  }
+
+  .choice-chip {
+    padding: 12px 14px;
+  }
+
+  /* 模态窄屏 */
+  .editor-overlay {
+    padding: 12px;
+  }
+
+  .editor-page {
+    width: 100%;
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  /* 品牌区在窄屏缩小，避免 55px 字号撑破 360px 屏 */
+  .app-brand-copy strong {
+    font-size: 34px;
+  }
+
+  .app-brand-logo {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+  }
+
+  /* 运行卡内部紧凑列表字号略增 */
+  .compact-item {
+    font-size: 12px;
+  }
+}
+
+/* —— 更窄屏（≤480px）：卡片字段单列、登录微调 —— */
+@media (max-width: 480px) {
+  .position-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .login-card {
+    padding: 24px 20px;
+  }
+
+  .login-copy h1 {
+    font-size: 28px;
+  }
+
+  .app-brand-copy strong {
+    font-size: 28px;
+  }
+
+  .chat-composer-shell {
+    grid-template-columns: 38px minmax(0, 1fr) 40px;
+    gap: 8px;
+    padding: 9px 11px;
+  }
+
+  .chat-composer-add-button,
+  .chat-composer-send-button {
+    width: 38px;
+    height: 38px;
+  }
+}
+
+/* —— iOS 安全区 + 100dvh 修正 —— */
+@supports (height: 100dvh) {
+  .login-page {
+    min-height: calc(100dvh - 56px);
+  }
+
+  .editor-page {
+    max-height: calc(100dvh - 48px);
+  }
+}
+
+.app-header {
+  padding-top: env(safe-area-inset-top);
+}
+
+.chat-workspace {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.editor-page {
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+}
+
+@media (max-width: 720px) {
+  .page-shell {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .chat-composer-shell {
+    margin-bottom: env(safe-area-inset-bottom);
+  }
+}

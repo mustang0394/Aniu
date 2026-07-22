@@ -1,0 +1,110 @@
+/* =============================================================
+   Aniu 设计令牌 — Apple HIG 浅色主题
+   唯一事实来源：所有颜色/材质/圆角/阴影/字号都在此定义。
+   组件与视图规则只引用变量，不写裸色值。
+   ============================================================= */
+
+:root {
+  color-scheme: light;
+
+  /* —— 字体：系统栈（SF Pro 风格回退） —— */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo,
+    Consolas, "Liberation Mono", monospace;
+
+  /* —— 背景层级（Apple systemBackground 思路） —— */
+  --bg-page: #f5f5f7;
+  --bg-grouped: #ffffff;
+  --bg-card: rgba(255, 255, 255, 0.72);
+  --bg-card-solid: #ffffff;
+  --bg-fill: rgba(120, 120, 128, 0.08);
+  --bg-fill-secondary: rgba(120, 120, 128, 0.12);
+  --bg-fill-tertiary: rgba(118, 118, 128, 0.16);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.07);
+
+  /* —— 文字层级（Apple label 体系，对浅色底对比度 ≥4.5:1） —— */
+  --label-primary: #1d1d1f;
+  --label-secondary: rgba(60, 60, 67, 0.72);
+  --label-tertiary: rgba(60, 60, 67, 0.5);
+  --label-quaternary: rgba(60, 60, 67, 0.32);
+  --label-on-accent: #ffffff;
+
+  /* —— 分隔线（浅色用低透明度黑） —— */
+  --separator: rgba(0, 0, 0, 0.08);
+  --separator-strong: rgba(0, 0, 0, 0.12);
+  --separator-opaque: #d1d1d6;
+
+  /* —— 强调色（Apple 系统蓝） —— */
+  --accent: #007aff;
+  --accent-hover: #0066d6;
+  --accent-active: #0051b0;
+  --accent-text: #0066cc;
+  --accent-soft: rgba(0, 122, 255, 0.1);
+  --accent-ring: rgba(0, 122, 255, 0.25);
+
+  /* —— 语义色（文字用深色变体保证对比度） —— */
+  --success: #34c759;
+  --success-text: #1e8e3e;
+  --success-soft: rgba(52, 199, 89, 0.12);
+  --warning: #ff9500;
+  --warning-text: #b25000;
+  --warning-soft: rgba(255, 149, 0, 0.12);
+  --danger: #ff3b30;
+  --danger-text: #d70015;
+  --danger-soft: rgba(255, 59, 48, 0.1);
+  --info: #007aff;
+  --info-text: #0066cc;
+  --info-soft: rgba(0, 122, 255, 0.1);
+
+  /* —— 盈亏语义（A股红涨绿跌） —— */
+  --profit-up: #ff3b30;
+  --profit-up-text: #d70015;
+  --profit-up-soft: rgba(255, 59, 48, 0.1);
+  --profit-down: #34c759;
+  --profit-down-text: #1e8e3e;
+  --profit-down-soft: rgba(52, 199, 89, 0.12);
+
+  /* —— 毛玻璃材质（背景 + backdrop-filter 成对使用） —— */
+  --material-nav-bg: rgba(255, 255, 255, 0.72);
+  --material-nav: saturate(180%) blur(20px);
+  --material-card-bg: rgba(255, 255, 255, 0.7);
+  --material-card: saturate(180%) blur(20px);
+  --material-thin-bg: rgba(255, 255, 255, 0.55);
+  --material-thin: saturate(160%) blur(12px);
+  --material-overlay-bg: rgba(0, 0, 0, 0.32);
+  --material-overlay: blur(16px);
+
+  /* —— 圆角阶梯 —— */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* —— 阴影阶梯（柔和弥散，替代 inset 高光） —— */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 4px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.08), 0 16px 48px rgba(0, 0, 0, 0.12);
+  --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.22), 0 4px 16px rgba(0, 0, 0, 0.08);
+
+  /* —— 字号阶梯 —— */
+  --text-caption: 12px;
+  --text-footnote: 13px;
+  --text-body: 14px;
+  --text-callout: 15px;
+  --text-title-3: 17px;
+  --text-title-2: 20px;
+  --text-title-1: 28px;
+  --text-large-number: 32px;
+
+  /* —— 原有布局变量（原样保留） —— */
+  --overview-table-head-height: 45px;
+  --overview-table-row-height: 80px;
+  --overview-table-visible-rows: 5;
+  --overview-table-fixed-height: calc(var(--overview-table-head-height) + (var(--overview-table-row-height) * var(--overview-table-visible-rows)));
+  /* --chat-pane-height 在 style.css 的 .chat-workspace 作用域定义并在其 @media 中覆盖，不在此重复。 */
+}

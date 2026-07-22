@@ -993,7 +993,7 @@ onBeforeUnmount(() => {
   padding: 5px 8px;
   box-sizing: border-box;
   border: none;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--bg-fill);
   border-radius: 4px;
   text-align: left;
   cursor: pointer;
@@ -1006,7 +1006,7 @@ onBeforeUnmount(() => {
 }
 
 .compact-item-button:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-fill);
 }
 
 .compact-item-button.active {
@@ -1015,12 +1015,12 @@ onBeforeUnmount(() => {
 
 .compact-item-button.active .item-name,
 .compact-item-button.active .trade-text-action {
-  color: #f6fbff;
+  color: var(--label-primary);
 }
 
 .compact-item-button.active .item-summary,
 .compact-item-button.active .trade-text-summary {
-  color: #a9c7e8;
+  color: var(--label-secondary);
 }
 
 .compact-item-button .item-name,
@@ -1064,14 +1064,14 @@ onBeforeUnmount(() => {
   opacity: 0;
   transform: translateY(10px) scale(0.92);
   filter: saturate(0.72) brightness(0.95);
-  box-shadow: 0 0 0 rgba(15, 23, 42, 0);
+  box-shadow: 0 0 0 var(--bg-fill);
 }
 
 .stream-reveal-enter-to {
   opacity: 1;
   transform: translateY(0) scale(1);
   filter: saturate(1) brightness(1);
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 10px 22px var(--bg-fill);
 }
 
 .stream-reveal-move {
@@ -1084,24 +1084,20 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   align-self: center;
   border-radius: 999px;
-  background: rgba(74, 222, 128, 0.92);
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+  background: rgba(52, 199, 89, 0.92);
 }
 
 .compact-item-status-dot.is-running {
-  background: #31d69f;
-  box-shadow: 0 0 10px rgba(49, 214, 159, 0.68);
+  background: var(--success);
   animation: live-pulse 1.4s ease-in-out infinite;
 }
 
 .compact-item-status-dot.is-success {
-  background: rgba(74, 222, 128, 0.96);
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.42);
+  background: rgba(52, 199, 89, 0.96);
 }
 
 .compact-item-status-dot.is-failed {
-  background: rgba(248, 113, 113, 0.96);
-  box-shadow: 0 0 8px rgba(248, 113, 113, 0.42);
+  background: rgba(255, 59, 48, 0.96);
 }
 
 .trade-text-summary {
@@ -1120,9 +1116,9 @@ onBeforeUnmount(() => {
   padding: 12px;
   overflow: hidden;
   height: 700px;
-  border: 1px solid rgba(145, 170, 214, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.4);
+  background: var(--bg-fill);
 }
 
 .markdown-content {
@@ -1134,7 +1130,7 @@ onBeforeUnmount(() => {
 }
 
 .markdown-content:hover {
-  scrollbar-color: rgba(145, 170, 214, 0.3) rgba(15, 23, 42, 0.05);
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
 }
 
 .markdown-content::-webkit-scrollbar {
@@ -1146,12 +1142,12 @@ onBeforeUnmount(() => {
 }
 
 .markdown-content::-webkit-scrollbar-thumb {
-  background: rgba(145, 170, 214, 0.25);
+  background: rgba(0, 0, 0, 0.125);
   border-radius: 10px;
 }
 
 .markdown-content:hover::-webkit-scrollbar-thumb {
-  background: rgba(145, 170, 214, 0.45);
+  background: rgba(0, 0, 0, 0.225);
 }
 
 .markdown-content :deep(p:first-child) {
@@ -1164,7 +1160,7 @@ onBeforeUnmount(() => {
 
 .live-markdown-content :deep(.live-output-loading) {
   margin: 0;
-  color: #8ea4c5;
+  color: var(--label-tertiary);
 }
 
 .raw-output-content {
@@ -1175,7 +1171,7 @@ onBeforeUnmount(() => {
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
-  color: #e2e8f0;
+  color: var(--label-primary);
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -1183,7 +1179,7 @@ onBeforeUnmount(() => {
 }
 
 .raw-output-content:hover {
-  scrollbar-color: rgba(145, 170, 214, 0.3) rgba(15, 23, 42, 0.05);
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
 }
 
 .raw-output-content::-webkit-scrollbar {
@@ -1195,12 +1191,12 @@ onBeforeUnmount(() => {
 }
 
 .raw-output-content::-webkit-scrollbar-thumb {
-  background: rgba(145, 170, 214, 0.25);
+  background: rgba(0, 0, 0, 0.125);
   border-radius: 10px;
 }
 
 .raw-output-content:hover::-webkit-scrollbar-thumb {
-  background: rgba(145, 170, 214, 0.45);
+  background: rgba(0, 0, 0, 0.225);
 }
 
 .output-surface > .detail-empty-state {

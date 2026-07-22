@@ -1,0 +1,543 @@
+/* =============================================================
+   views.css — 视图专属规则（overview/tasks/chat/schedule/settings/login）
+   只引用 tokens.css 变量。
+   ============================================================= */
+
+/* —— MX 妙想密钥状态 —— */
+.mx-key-status {
+  margin-top: 8px;
+  display: inline-block;
+  padding: 6px 12px;
+  background: var(--bg-fill);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+}
+
+.mx-key-status .meta-label {
+  margin-right: 8px;
+}
+
+.hero-actions,
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ============================================================
+   Overview — 账户总览
+   ============================================================ */
+.overview-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.stat-card {
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  background: var(--material-card-bg);
+  backdrop-filter: var(--material-card);
+  -webkit-backdrop-filter: var(--material-card);
+  border: 1px solid var(--separator);
+  box-shadow: var(--shadow-sm);
+}
+
+.stat-card strong {
+  display: block;
+  margin-top: 12px;
+  font-size: var(--text-title-1);
+  font-weight: 700;
+  color: var(--label-primary);
+}
+
+.stat-card strong.profit-up {
+  color: var(--profit-up) !important;
+}
+
+.stat-card strong.profit-down {
+  color: var(--profit-down) !important;
+}
+
+.stat-card p {
+  margin: 8px 0 0;
+  color: var(--label-tertiary);
+  font-size: var(--text-body);
+}
+
+.stat-card-inline {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--separator);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--label-tertiary);
+  font-size: 13px;
+}
+
+.stat-card-inline b {
+  color: var(--label-primary);
+  font-size: 15px;
+}
+
+.stat-card-inline b.profit-up {
+  color: var(--profit-up-text);
+}
+
+.stat-card-inline b.profit-down {
+  color: var(--profit-down-text);
+}
+
+/* —— 持仓/交易/委托面板 —— */
+.positions-panel,
+.orders-panel,
+.trade-summary-panel {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.positions-panel {
+  min-height: 545px;
+  height: 545px;
+  background: var(--material-card-bg);
+  backdrop-filter: var(--material-card);
+  -webkit-backdrop-filter: var(--material-card);
+  border: 1px solid var(--separator);
+  box-shadow: var(--shadow-sm);
+}
+
+.orders-panel {
+  min-height: 545px;
+  height: 545px;
+}
+
+.trade-summary-panel {
+  min-height: 545px;
+  height: 545px;
+}
+
+.positions-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.positions-list:hover {
+  scrollbar-color: rgba(0, 0, 0, 0.24) transparent;
+}
+
+.positions-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.positions-list::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 10px;
+}
+
+.positions-list::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+}
+
+.position-item {
+  padding: 14px 16px;
+  background: var(--bg-fill);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease;
+}
+
+.position-item:hover {
+  background: var(--bg-hover);
+}
+
+.positions-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--separator);
+  background: var(--bg-card-solid);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.positions-grid-header {
+  height: 45px;
+  background: var(--bg-fill);
+  border-bottom: 1px solid var(--separator);
+}
+
+.positions-grid-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.16) transparent;
+}
+
+.positions-grid-body::-webkit-scrollbar {
+  width: 2px;
+}
+
+.positions-grid-body::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.positions-grid-body::-webkit-scrollbar-button:start:decrement,
+.positions-grid-body::-webkit-scrollbar-button:end:increment,
+.positions-grid-body::-webkit-scrollbar-button:single-button,
+.positions-grid-body::-webkit-scrollbar-button:double-button,
+.positions-grid-body::-webkit-scrollbar-button:vertical:start:decrement,
+.positions-grid-body::-webkit-scrollbar-button:vertical:end:increment {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+.positions-grid-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.positions-grid-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 999px;
+}
+
+.positions-grid-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.positions-grid-row {
+  display: grid;
+  grid-template-columns:
+    150px
+    minmax(130px, 0.92fr)
+    minmax(180px, 1.08fr)
+    minmax(180px, 1.08fr)
+    minmax(180px, 1.08fr)
+    minmax(150px, 0.96fr)
+    minmax(110px, 0.72fr);
+}
+
+.positions-grid-row-head {
+  min-height: var(--overview-table-head-height);
+}
+
+.positions-grid-body .positions-grid-row {
+  min-height: var(--overview-table-row-height);
+}
+
+.positions-grid-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--separator);
+  color: var(--label-primary);
+  font-size: 16px;
+  text-align: center;
+}
+
+.overview-grid-head-cell {
+  color: var(--label-tertiary);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  justify-content: center;
+  text-align: center;
+}
+
+.overview-grid-head-cell.positions-grid-cell-primary {
+  justify-content: center;
+  text-align: center;
+}
+
+.positions-grid-body .positions-grid-row:hover {
+  background: var(--bg-hover);
+}
+
+.positions-grid-cell-primary {
+  justify-content: center;
+  text-align: center;
+}
+
+.positions-surface .position-name {
+  font-size: 17px;
+}
+
+.positions-surface .position-symbol,
+.positions-surface .metric-sub {
+  font-size: 13px;
+}
+
+.positions-grid-body .positions-grid-row:last-child .positions-grid-cell {
+  border-bottom: none;
+}
+
+.trade-grid-row {
+  display: grid;
+  grid-template-columns:
+    150px
+    minmax(170px, 1fr)
+    minmax(170px, 1fr)
+    minmax(130px, 0.86fr)
+    minmax(170px, 1.02fr)
+    minmax(170px, 1.02fr)
+    minmax(170px, 1.02fr);
+}
+
+.orders-grid-row {
+  display: grid;
+  grid-template-columns:
+    150px
+    minmax(150px, 0.95fr)
+    minmax(130px, 0.8fr)
+    minmax(170px, 1.02fr)
+    minmax(170px, 1.02fr)
+    minmax(150px, 0.9fr);
+}
+
+.trade-grid-row-head,
+.orders-grid-row-head {
+  min-height: var(--overview-table-head-height);
+}
+
+.positions-grid-body .trade-grid-row,
+.positions-grid-body .orders-grid-row {
+  min-height: var(--overview-table-row-height);
+}
+
+.positions-grid-body .trade-grid-row:hover,
+.positions-grid-body .orders-grid-row:hover {
+  background: var(--bg-hover);
+}
+
+.positions-grid-body .trade-grid-row:last-child .positions-grid-cell,
+.positions-grid-body .orders-grid-row:last-child .positions-grid-cell {
+  border-bottom: none;
+}
+
+.trade-time-cell {
+  white-space: nowrap;
+}
+
+.position-cell-main,
+.position-cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.positions-grid-cell-primary .position-cell-main {
+  align-items: flex-start;
+}
+
+.order-side {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-fill);
+  color: var(--label-secondary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.order-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* A股语义：success=买入/盈利=红，danger=卖出/亏损=绿 */
+.order-status-success {
+  color: var(--profit-up-text);
+  background: var(--profit-up-soft);
+}
+
+.order-status-danger {
+  color: var(--profit-down-text);
+  background: var(--profit-down-soft);
+}
+
+.position-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.position-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+}
+
+.position-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.position-symbol {
+  font-size: 11px;
+  color: var(--label-tertiary);
+}
+
+.position-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(92px, 1fr));
+  gap: 16px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 80px;
+}
+
+.metric-label {
+  font-size: 10px;
+  color: var(--label-quaternary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metric-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--label-primary);
+}
+
+.metric-sub {
+  font-size: 11px;
+  color: var(--label-tertiary);
+}
+
+/* ============================================================
+   Login — 登录页
+   ============================================================ */
+.login-page {
+  min-height: calc(100vh - 56px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  width: min(100%, 420px);
+  padding: 36px 32px 32px;
+  border-radius: var(--radius-xl);
+  background: var(--material-card-bg);
+  backdrop-filter: var(--material-card);
+  -webkit-backdrop-filter: var(--material-card);
+  border: 1px solid var(--separator);
+  box-shadow: var(--shadow-lg);
+}
+
+.login-avatar-shell {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.14), rgba(52, 199, 89, 0.1));
+  border: 1px solid var(--separator);
+}
+
+.login-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+}
+
+.login-copy {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.login-copy h1 {
+  margin: 0;
+  font-size: 36px;
+  line-height: 1;
+  color: var(--label-primary);
+}
+
+.login-copy p {
+  margin: 10px 0 0;
+  color: var(--label-tertiary);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-remember-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -2px;
+  color: var(--label-secondary);
+  font-size: 13px;
+  user-select: none;
+}
+
+.login-remember-row input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.login-error {
+  margin: -4px 0 0;
+  color: var(--danger-text);
+  font-size: 13px;
+}
+
+.login-submit {
+  width: 100%;
+  justify-content: center;
+  color: #ffffff !important;
+  font-weight: 400;
+  margin-top: 8px;
+}
+
+.login-submit:hover:not(:disabled) {
+  color: #ffffff !important;
+}

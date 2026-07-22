@@ -105,6 +105,11 @@ def _ensure_app_settings_columns(engine) -> None:
         statements.append(
             "ALTER TABLE app_settings ADD COLUMN tg_notify_trade_enabled BOOLEAN DEFAULT 0"
         )
+    if "allowed_markets_json" not in columns:
+        statements.append(
+            "ALTER TABLE app_settings ADD COLUMN allowed_markets_json TEXT "
+            "DEFAULT '[\"sh_main\",\"sz_main\"]'"
+        )
 
     if not statements:
         return
@@ -121,7 +126,11 @@ def _ensure_app_settings_columns(engine) -> None:
                 "automation_enable_auto_compaction = COALESCE(automation_enable_auto_compaction, 1), "
                 "automation_idle_summary_hours = COALESCE(automation_idle_summary_hours, 12), "
                 "automation_context_source = COALESCE(NULLIF(trim(automation_context_source), ''), 'default'), "
-                "tg_notify_trade_enabled = COALESCE(tg_notify_trade_enabled, 0)"
+                "tg_notify_trade_enabled = COALESCE(tg_notify_trade_enabled, 0), "
+                "allowed_markets_json = COALESCE("
+                "NULLIF(trim(allowed_markets_json), ''), "
+                "'[\"sh_main\",\"sz_main\"]'"
+                ")"
             )
         )
 

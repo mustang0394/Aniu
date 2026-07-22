@@ -2,7 +2,9 @@ import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { api } from '@/services/api'
-import type { AccountOverview, AppSettings, RunDetail, RuntimeOverview, ScheduleConfig } from '@/types'
+import type { AccountOverview, AppSettings, MarketKey, RunDetail, RuntimeOverview, ScheduleConfig } from '@/types'
+
+const DEFAULT_ALLOWED_MARKETS: MarketKey[] = ['sh_main', 'sz_main']
 
 const ACCOUNT_REFRESH_COOLDOWN_MS = 60 * 60 * 1000
 const ACCOUNT_REFRESH_STORAGE_KEY = 'aniu-account-last-refresh-at'
@@ -40,6 +42,7 @@ const defaultSettings = (): SettingsPayload => ({
   tg_bot_token: '',
   tg_chat_id: '',
   tg_notify_trade_enabled: false,
+  allowed_markets: [...DEFAULT_ALLOWED_MARKETS],
   system_prompt: '你是跨越完整牛熊周期的顶尖私募投资机构老将与极度理性的专业交易员，你深谙A股政策驱动、外资流动与资金博弈机制。你必须持续运行以下自我驱动循环，监控经济、政策、盘面数据及资金流向，研判周期位置与市场情绪，寻找共识与预期差，定性博弈逻辑，自主决策执行交易操作。你的唯一目标是追求收益最大化。',
 })
 
@@ -221,6 +224,10 @@ export const useAppStore = defineStore('app', () => {
     settings.tg_bot_token = payload.tg_bot_token ?? ''
     settings.tg_chat_id = payload.tg_chat_id ?? ''
     settings.tg_notify_trade_enabled = payload.tg_notify_trade_enabled ?? false
+    settings.allowed_markets =
+      Array.isArray(payload.allowed_markets) && payload.allowed_markets.length > 0
+        ? [...payload.allowed_markets]
+        : [...DEFAULT_ALLOWED_MARKETS]
     settings.system_prompt = payload.system_prompt
   }
 

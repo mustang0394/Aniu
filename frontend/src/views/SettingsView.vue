@@ -78,6 +78,27 @@
               <input v-model="settings.tg_chat_id" type="password" placeholder="-100xxxxxxxxxx" />
               <p class="field-help">接收通知的 Telegram 聊天 ID，可通过 @userinfobot 查询。</p>
             </label>
+            <div class="field market-scope-field">
+              <span>选股范围</span>
+              <div class="market-scope-grid" role="group" aria-label="选股范围">
+                <label
+                  v-for="option in marketOptions"
+                  :key="option.key"
+                  class="market-scope-item"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="settings.allowed_markets.includes(option.key)"
+                    :disabled="busy"
+                    @change="toggleMarket(option.key, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ option.label }}</span>
+                </label>
+              </div>
+              <p class="field-help">
+                勾选允许选股与买入的市场。买入会按代码硬拦截；卖出/撤单不受限制，便于清理历史持仓。默认仅上证/深证 A 股。
+              </p>
+            </div>
           </div>
           <div class="settings-right">
             <label class="field">
@@ -252,7 +273,15 @@ import { storeToRefs } from 'pinia'
 
 import { useSkillManager } from '@/composables/useSkillManager'
 import { useAppStore } from '@/stores/legacy'
-import type { SkillListItem } from '@/types'
+import type { MarketKey, SkillListItem } from '@/types'
+
+const marketOptions: { key: MarketKey; label: string }[] = [
+  { key: 'sh_main', label: '上证A股' },
+  { key: 'sz_main', label: '深证A股' },
+  { key: 'chinext', label: '创业板' },
+  { key: 'star', label: '科创板' },
+  { key: 'bse', label: '北交所' },
+]
 
 const store = useAppStore()
 const { settings, busy, errorMessage } = storeToRefs(store)
@@ -273,6 +302,21 @@ const {
   deleteSkill: deleteManagedSkill,
 } = useSkillManager()
 const skillArchiveInputRef = ref<HTMLInputElement | null>(null)
+
+function toggleMarket(key: MarketKey, checked: boolean) {
+  const current = new Set(settings.value.allowed_markets)
+  if (checked) {
+    current.add(key)
+  } else {
+    current.delete(key)
+  }
+  // 至少保留一个市场；取消最后一个时忽略
+  if (current.size === 0) {
+    return
+  }
+  const order: MarketKey[] = ['sh_main', 'sz_main', 'chinext', 'star', 'bse']
+  settings.value.allowed_markets = order.filter((item) => current.has(item))
+}
 
 function openImportFileDialog() {
   if (skillArchiveInputRef.value) {

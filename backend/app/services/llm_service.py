@@ -8,6 +8,10 @@ import httpx
 
 from app.skills.providers import build_skill_context
 from skills.mx_core.client import MXClient
+from skills.mx_core.markets import (
+    build_allowed_markets_prompt,
+    get_allowed_markets_from_settings,
+)
 from app.skills import skill_registry
 
 _LLM_TEMPERATURE = 0.2
@@ -251,9 +255,11 @@ class LLMService:
         enable_reasoning_echo: bool = False,
     ) -> str:
         payload_messages: list[dict[str, Any]] = []
+        chat_app_settings = (tool_context or {}).get("app_settings")
         effective_system_prompt = self._augment_system_prompt(
             system_prompt,
             run_type="chat",
+            app_settings=chat_app_settings,
         )
         if effective_system_prompt:
             payload_messages.append(
@@ -262,7 +268,7 @@ class LLMService:
         payload_messages.extend(messages)
         chat_tool_context = build_skill_context(
             run_type="chat",
-            app_settings=(tool_context or {}).get("app_settings"),
+            app_settings=chat_app_settings,
             client=(tool_context or {}).get("client"),
             base_context=tool_context,
         )
@@ -293,6 +299,7 @@ class LLMService:
         system_prompt = self._augment_system_prompt(
             app_settings.system_prompt,
             run_type=run_type,
+            app_settings=app_settings,
         )
         return {
             "model": app_settings.llm_model,
@@ -315,6 +322,7 @@ class LLMService:
         system_prompt = self._augment_system_prompt(
             app_settings.system_prompt,
             run_type=run_type,
+            app_settings=app_settings,
         )
         payload_messages: list[dict[str, Any]] = []
         if system_prompt:
@@ -333,11 +341,16 @@ class LLMService:
         base_prompt: str | None,
         *,
         run_type: str | None = None,
+        app_settings: Any = None,
     ) -> str:
         supplement = skill_registry.build_prompt_supplement(run_type=run_type)
+        market_prompt = build_allowed_markets_prompt(
+            get_allowed_markets_from_settings(app_settings)
+        )
         prompt_parts = [
             str(base_prompt or "").strip(),
             str(supplement or "").strip(),
+            str(market_prompt or "").strip(),
         ]
         if str(run_type or "").strip() == "trade":
             prompt_parts.append(_TRADE_ENFORCEMENT_PROMPT)

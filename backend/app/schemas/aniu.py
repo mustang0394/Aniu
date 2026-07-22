@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from skills.mx_core.markets import (
+    DEFAULT_ALLOWED_MARKETS,
+    dumps_allowed_markets,
+    normalize_allowed_markets,
+)
+
+MarketKey = Literal["sh_main", "sz_main", "chinext", "star", "bse"]
 
 
 def _mask_key(value: str | None) -> str | None:
@@ -30,6 +38,15 @@ class AppSettingsBase(BaseModel):
     tg_bot_token: str | None = Field(default=None, max_length=512)
     tg_chat_id: str | None = Field(default=None, max_length=512)
     tg_notify_trade_enabled: bool = False
+    allowed_markets: list[MarketKey] = Field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_MARKETS),
+        min_length=1,
+    )
+
+    @field_validator("allowed_markets", mode="before")
+    @classmethod
+    def _normalize_allowed_markets(cls, value: Any) -> list[str]:
+        return normalize_allowed_markets(value)
 
 
 class AppSettingsRead(AppSettingsBase):
@@ -38,6 +55,65 @@ class AppSettingsRead(AppSettingsBase):
     id: int
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _hydrate_allowed_markets(cls, data: Any) -> Any:
+        """Map ORM/json storage into the API-facing allowed_markets list.
+
+        Always prefer ``allowed_markets_json`` when present so a previously
+        hydrated in-memory attribute cannot shadow a newer DB value.
+        """
+        if data is None:
+            return data
+        if isinstance(data, dict):
+            payload = dict(data)
+            if payload.get("allowed_markets_json") is not None:
+                payload["allowed_markets"] = normalize_allowed_markets(
+                    payload.get("allowed_markets_json")
+                )
+            elif "allowed_markets" not in payload:
+                payload["allowed_markets"] = normalize_allowed_markets(None)
+            return payload
+
+        raw_json = getattr(data, "allowed_markets_json", None)
+        if raw_json is not None:
+            markets = normalize_allowed_markets(raw_json)
+        else:
+            markets = normalize_allowed_markets(getattr(data, "allowed_markets", None))
+        return {
+            "id": getattr(data, "id"),
+            "provider_name": getattr(data, "provider_name", "openai-compatible"),
+            "mx_api_key": getattr(data, "mx_api_key", None),
+            "llm_base_url": getattr(data, "llm_base_url", None),
+            "llm_api_key": getattr(data, "llm_api_key", None),
+            "llm_model": getattr(data, "llm_model", "gpt-4o-mini"),
+            "system_prompt": getattr(data, "system_prompt", ""),
+            "automation_session_id": getattr(data, "automation_session_id", None),
+            "automation_context_window_tokens": getattr(
+                data, "automation_context_window_tokens", 128000
+            ),
+            "automation_recent_message_limit": getattr(
+                data, "automation_recent_message_limit", 24
+            ),
+            "automation_enable_auto_compaction": getattr(
+                data, "automation_enable_auto_compaction", True
+            ),
+            "automation_idle_summary_hours": getattr(
+                data, "automation_idle_summary_hours", 12
+            ),
+            "llm_enable_reasoning_content_echo": getattr(
+                data, "llm_enable_reasoning_content_echo", False
+            ),
+            "tg_bot_token": getattr(data, "tg_bot_token", None),
+            "tg_chat_id": getattr(data, "tg_chat_id", None),
+            "tg_notify_trade_enabled": getattr(
+                data, "tg_notify_trade_enabled", False
+            ),
+            "allowed_markets": markets,
+            "created_at": getattr(data, "created_at"),
+            "updated_at": getattr(data, "updated_at"),
+        }
 
     @model_validator(mode="after")
     def mask_sensitive_fields(self) -> "AppSettingsRead":
@@ -49,7 +125,11 @@ class AppSettingsRead(AppSettingsBase):
 
 
 class AppSettingsUpdate(AppSettingsBase):
-    pass
+    def to_orm_fields(self) -> dict[str, Any]:
+        payload = self.model_dump()
+        markets = payload.pop("allowed_markets")
+        payload["allowed_markets_json"] = dumps_allowed_markets(markets)
+        return payload
 
 
 class SkillListItemRead(BaseModel):

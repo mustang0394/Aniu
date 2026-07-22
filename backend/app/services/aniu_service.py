@@ -363,7 +363,12 @@ class AniuService:
         instance = self.get_or_create_settings(db)
         sensitive_fields = {"mx_api_key", "llm_api_key", "tg_bot_token", "tg_chat_id"}
         changed_fields: list[str] = []
-        for field, value in payload.model_dump().items():
+        orm_fields = (
+            payload.to_orm_fields()
+            if hasattr(payload, "to_orm_fields")
+            else payload.model_dump()
+        )
+        for field, value in orm_fields.items():
             if field in sensitive_fields:
                 if isinstance(value, str) and "****" in value:
                     continue
@@ -1760,6 +1765,8 @@ class AniuService:
             db.add(run)
             db.flush()
             run_id = run.id
+            from skills.mx_core.markets import get_allowed_markets_from_settings
+
             settings_snapshot = {
                 "id": settings.id,
                 "mx_api_key": settings.mx_api_key,
@@ -1804,6 +1811,10 @@ class AniuService:
                 "tg_chat_id": getattr(settings, "tg_chat_id", None),
                 "tg_notify_trade_enabled": getattr(
                     settings, "tg_notify_trade_enabled", False
+                ),
+                "allowed_markets": get_allowed_markets_from_settings(settings),
+                "allowed_markets_json": getattr(
+                    settings, "allowed_markets_json", None
                 ),
             }
         return run_id, settings_snapshot

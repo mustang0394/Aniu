@@ -3,6 +3,15 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from skills.mx_core.client import MXClient
+from skills.mx_core.markets import (
+    MARKET_LABELS,
+    append_market_constraint_to_query,
+    filter_candidates_by_markets,
+    get_allowed_markets_from_settings,
+    is_buy_allowed,
+    normalize_allowed_markets,
+)
+from skills.mx_core.parsers import extract_candidates
 from skills.mx_core.tool_specs import TOOL_PROFILES, TOOL_SPECS, build_tools
 
 
@@ -94,13 +103,28 @@ class MXExecutionService:
     def _handle_screen_stocks(
         self, *, client: MXClient, app_settings: Any, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        query = self._resolve_query(arguments, app_settings)
+        allowed_markets = get_allowed_markets_from_settings(app_settings)
+        raw_query = self._resolve_query(arguments, app_settings)
+        query = append_market_constraint_to_query(raw_query, allowed_markets)
         result = client.screen_stocks(query)
+        candidates = extract_candidates(result if isinstance(result, dict) else {}, limit=50)
+        kept, removed = filter_candidates_by_markets(candidates, allowed_markets)
+        allowed_labels = "、".join(MARKET_LABELS[key] for key in allowed_markets)
+        summary = f"已执行选股：{query}。"
+        if removed:
+            summary += (
+                f" 按选股范围（{allowed_labels}）过滤后保留 {len(kept)} 只，"
+                f"排除 {len(removed)} 只。"
+            )
         return {
             "ok": True,
             "tool_name": "mx_screen_stocks",
-            "summary": f"已执行选股：{query}。",
+            "summary": summary,
             "result": result,
+            "allowed_markets": allowed_markets,
+            "filtered_candidates": kept,
+            "filtered_out_count": len(removed),
+            "filtered_out_samples": removed[:10],
         }
 
     def _handle_get_positions(
@@ -170,7 +194,6 @@ class MXExecutionService:
     def _handle_moni_trade(
         self, *, client: MXClient, app_settings: Any, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        del app_settings
         action = str(arguments.get("action") or "").upper()
         symbol = str(arguments.get("symbol") or "").strip()
         price_type = str(arguments.get("price_type") or "MARKET").upper()
@@ -201,6 +224,19 @@ class MXExecutionService:
                 price = float(price)
             except (TypeError, ValueError):
                 price = None
+
+        allowed_markets = get_allowed_markets_from_settings(app_settings)
+        if action == "BUY":
+            allowed, market, reject_reason = is_buy_allowed(symbol, allowed_markets)
+            if not allowed:
+                return {
+                    "ok": False,
+                    "tool_name": "mx_moni_trade",
+                    "error": reject_reason
+                    or "当前选股范围不允许买入该股票。",
+                    "allowed_markets": normalize_allowed_markets(allowed_markets),
+                    "market": market,
+                }
 
         result = client.trade(
             action=action,

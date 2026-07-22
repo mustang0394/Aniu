@@ -27,6 +27,10 @@ class AppSettings(Base):
         Text,
         default="[]",
     )
+    allowed_markets_json: Mapped[str] = mapped_column(
+        Text,
+        default='["sh_main","sz_main"]',
+    )
     system_prompt: Mapped[str] = mapped_column(
         Text,
         default=DEFAULT_SYSTEM_PROMPT,

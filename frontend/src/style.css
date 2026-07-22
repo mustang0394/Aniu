@@ -3737,6 +3737,38 @@ textarea {
   color: #c8d8ec;
 }
 
+.market-scope-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.market-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.market-scope-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 160, 220, 0.18);
+  background: rgba(12, 24, 40, 0.45);
+  color: #d7e6fb;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.market-scope-item input {
+  accent-color: #4f8cff;
+  width: 15px;
+  height: 15px;
+}
+
 .settings-inline-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

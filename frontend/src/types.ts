@@ -1,3 +1,5 @@
+export type MarketKey = 'sh_main' | 'sz_main' | 'chinext' | 'star' | 'bse'
+
 export interface AppSettings {
   id: number
   provider_name: string
@@ -10,6 +12,7 @@ export interface AppSettings {
   tg_bot_token: string | null
   tg_chat_id: string | null
   tg_notify_trade_enabled: boolean
+  allowed_markets: MarketKey[]
   system_prompt: string
   created_at: string
   updated_at: string

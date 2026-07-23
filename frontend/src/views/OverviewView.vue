@@ -9,7 +9,7 @@
               </div>
               <div class="panel-head-actions">
                 <button
-                  class="button ghost small soft-header-button overview-refresh-button"
+                  class="button tinted small soft-header-button overview-refresh-button"
                   :class="{ 'is-loading': accountRefreshing }"
                   :disabled="accountRefreshing || !canManualRefreshAccount"
                   :title="canManualRefreshAccount ? '手动刷新账户信息' : `${accountRefreshCooldownText}后可刷新`"
@@ -20,7 +20,7 @@
               </div>
             </div>
             <div class="overview-stats">
-              <div class="stat-card">
+              <div class="stat-card tone-status">
                 <span class="meta-label">账户状态</span>
                 <strong>{{ formatDays(account?.operating_days) }}</strong>
                 <p>运作天数</p>
@@ -33,7 +33,7 @@
                   <b :class="tradeSuccessRateClass(tradeSuccessRate)">{{ formatPercent(tradeSuccessRate) }}</b>
                 </div>
               </div>
-              <div class="stat-card">
+              <div class="stat-card tone-capital">
                 <span class="meta-label">资金规模</span>
                 <strong :class="profitClass(getAssetDelta(account?.total_assets, account?.initial_capital))">{{ formatMoney(account?.total_assets) }}</strong>
                 <p>账户总资产</p>
@@ -46,7 +46,7 @@
                   <b>1.000</b>
                 </div>
               </div>
-              <div class="stat-card">
+              <div class="stat-card tone-position">
                 <span class="meta-label">仓位情况</span>
                 <strong>{{ formatMoney(account?.total_market_value) }}</strong>
                 <p>总持仓市值</p>
@@ -59,7 +59,7 @@
                   <b>{{ formatPercent(account?.total_position_ratio) }}</b>
                 </div>
               </div>
-              <div class="stat-card">
+              <div class="stat-card tone-cumulative">
                 <span class="meta-label">累计表现</span>
                 <strong :class="profitClass(getAssetDelta(account?.total_assets, account?.initial_capital))">{{ formatSignedMoney(getAssetDelta(account?.total_assets, account?.initial_capital)) }}</strong>
                 <p>总收益金额</p>
@@ -72,7 +72,7 @@
                   <b :class="profitClass(getNavDelta(account?.nav))">{{ formatNav(account?.nav) }}</b>
                 </div>
               </div>
-              <div class="stat-card">
+              <div class="stat-card tone-daily">
                 <span class="meta-label">今日表现（{{ account?.daily_profit_trade_date || '--' }}）</span>
                 <strong :class="profitClass(account?.daily_profit)">{{ formatSignedMoney(account?.daily_profit) }}</strong>
                 <p>当日盈亏金额</p>

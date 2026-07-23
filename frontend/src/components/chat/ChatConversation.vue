@@ -30,7 +30,7 @@
       >
         <button
           type="button"
-          class="button ghost small"
+          class="button plain small"
           :disabled="loadingOlderMessages"
           @click="handleLoadOlder"
         >

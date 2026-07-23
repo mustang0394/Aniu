@@ -159,7 +159,7 @@
             <p class="section-kicker">Skills</p>
           </div>
           <button
-            class="button ghost small soft-header-button overview-refresh-button"
+            class="button tinted small soft-header-button overview-refresh-button"
             :class="{ 'is-loading': skillsBusy }"
             :disabled="skillsBusy"
             @click="reloadSkills"
@@ -258,7 +258,7 @@
               <button
                 v-if="skill.can_delete"
                 type="button"
-                class="button ghost small soft-header-button skill-delete-action"
+                class="button danger small soft-header-button skill-delete-action"
                 :disabled="skillsBusy"
                 @click="deleteSkill(skill)"
               >

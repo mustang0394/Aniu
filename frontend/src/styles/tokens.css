@@ -59,6 +59,17 @@
   --info-text: #0066cc;
   --info-soft: rgba(0, 122, 255, 0.1);
 
+  /* —— Apple 系统扩展色（卡片 tint / 标签） —— */
+  --indigo: #5856d6;
+  --indigo-text: #3634a3;
+  --indigo-soft: rgba(88, 86, 214, 0.12);
+  --teal: #30b0c7;
+  --teal-text: #0a7f94;
+  --teal-soft: rgba(48, 176, 199, 0.14);
+  --pink: #ff2d55;
+  --pink-text: #d70040;
+  --pink-soft: rgba(255, 45, 85, 0.1);
+
   /* —— 盈亏语义（A股红涨绿跌） —— */
   --profit-up: #ff3b30;
   --profit-up-text: #d70015;

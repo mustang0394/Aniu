@@ -27,7 +27,7 @@
           <span>Github</span>
         </a>
 
-        <button class="header-action-button" type="button" @click="handleLogout">退出</button>
+        <button class="header-action-button is-logout" type="button" @click="handleLogout">退出</button>
       </div>
     </header>
 

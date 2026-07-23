@@ -90,21 +90,35 @@
   height: 40px;
   padding: 0 14px;
   border-radius: var(--radius-pill);
-  border: 1px solid var(--separator);
-  background: var(--material-nav-bg);
+  border: 1px solid var(--separator-strong);
+  background: var(--bg-card-solid);
   backdrop-filter: var(--material-nav);
   -webkit-backdrop-filter: var(--material-nav);
-  color: var(--label-secondary);
+  color: var(--label-primary);
   font-size: 13px;
   font-weight: 600;
   text-decoration: none;
-  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+  box-shadow: var(--shadow-sm);
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .header-action-button:hover {
-  background: var(--bg-hover);
-  color: var(--label-primary);
-  border-color: var(--separator-strong);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-color: var(--accent-ring);
+}
+
+.header-action-button.is-logout {
+  color: var(--danger-text);
+  border-color: rgba(255, 59, 48, 0.22);
+  background: var(--danger-soft);
+  box-shadow: none;
+}
+
+.header-action-button.is-logout:hover {
+  background: rgba(255, 59, 48, 0.16);
+  color: var(--danger-text);
+  border-color: rgba(255, 59, 48, 0.34);
 }
 
 .header-action-link {
@@ -329,13 +343,28 @@
   background: var(--bg-fill);
 }
 
-/* —— 按钮 —— */
+/* —— 按钮（Apple：Filled / Tinted / Gray / Plain / Destructive） —— */
 .button {
-  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
   padding: 12px 18px;
   font-weight: 600;
-  transition: background 0.18s ease, opacity 0.18s ease, box-shadow 0.18s ease, transform 0.1s ease;
+  font-size: var(--text-body);
+  line-height: 1.2;
+  color: var(--label-primary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    border-color 0.18s ease,
+    opacity 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.1s ease;
 }
 
 .button:active:not(:disabled) {
@@ -347,41 +376,97 @@
   opacity: 0.55;
 }
 
+/* Filled — 主 CTA */
 .button.primary {
   background: var(--accent);
   color: var(--label-on-accent);
-  box-shadow: none;
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(0, 122, 255, 0.28);
 }
 
 .button.primary:hover:not(:disabled) {
   background: var(--accent-hover);
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.28);
 }
 
 .button.primary:active:not(:disabled) {
   background: var(--accent-active);
+  box-shadow: none;
 }
 
+/* Tinted — 重要次级操作（浅蓝底 + 蓝字） */
+.button.tinted {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-color: rgba(0, 122, 255, 0.18);
+}
+
+.button.tinted:hover:not(:disabled) {
+  background: rgba(0, 122, 255, 0.16);
+  border-color: var(--accent-ring);
+  color: var(--accent-hover);
+}
+
+.button.tinted:active:not(:disabled) {
+  background: rgba(0, 122, 255, 0.22);
+}
+
+/* Gray — 中性辅助（浅灰底 + 深字，非 tertiary） */
 .button.ghost {
   background: var(--bg-fill-secondary);
-  color: var(--accent-text);
-  border: none;
+  color: var(--label-primary);
+  border-color: var(--separator);
 }
 
 .button.ghost:hover:not(:disabled) {
   background: var(--bg-fill-tertiary);
+  border-color: var(--separator-strong);
+  color: var(--label-primary);
 }
 
+/* Plain — 最轻文字按钮 */
+.button.plain {
+  background: transparent;
+  color: var(--accent-text);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.button.plain:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+/* Destructive */
+.button.danger,
 .button.ghost.danger {
   color: var(--danger-text);
   background: var(--danger-soft);
+  border-color: rgba(255, 59, 48, 0.2);
 }
 
+.button.danger:hover:not(:disabled),
 .button.ghost.danger:hover:not(:disabled) {
   background: rgba(255, 59, 48, 0.16);
+  border-color: rgba(255, 59, 48, 0.32);
+  color: var(--danger-text);
+}
+
+.button.primary.danger {
+  background: var(--danger);
+  color: var(--label-on-accent);
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(255, 59, 48, 0.28);
+}
+
+.button.primary.danger:hover:not(:disabled) {
+  background: var(--danger-text);
+  box-shadow: 0 2px 8px rgba(255, 59, 48, 0.28);
 }
 
 .button.small {
   padding: 9px 14px;
+  font-size: var(--text-footnote);
 }
 
 .button.is-loading {
@@ -399,7 +484,7 @@
   height: 16px;
   margin-top: -8px;
   margin-left: -8px;
-  border: 2px solid rgba(0, 0, 0, 0.15);
+  border: 2px solid rgba(0, 0, 0, 0.12);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -408,6 +493,18 @@
 .button.primary.is-loading::after {
   border-color: rgba(255, 255, 255, 0.35);
   border-top-color: #ffffff;
+}
+
+.button.tinted.is-loading::after,
+.button.plain.is-loading::after {
+  border-color: rgba(0, 122, 255, 0.2);
+  border-top-color: var(--accent);
+}
+
+.button.danger.is-loading::after,
+.button.ghost.danger.is-loading::after {
+  border-color: rgba(255, 59, 48, 0.2);
+  border-top-color: var(--danger-text);
 }
 
 @keyframes spin {

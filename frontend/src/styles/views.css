@@ -35,21 +35,64 @@
   margin-top: 20px;
 }
 
+/* Apple Widget 风格：软 tint 底 + 顶色条 + 彩色标签 */
 .stat-card {
-  padding: 24px;
+  --stat-accent: var(--accent);
+  --stat-accent-text: var(--accent-text);
+  --stat-soft: var(--accent-soft);
+  --stat-border: rgba(0, 122, 255, 0.16);
+  --stat-glow: rgba(0, 122, 255, 0.1);
+
+  position: relative;
+  overflow: hidden;
+  padding: 22px 20px 20px;
   border-radius: var(--radius-lg);
-  background: var(--material-card-bg);
-  backdrop-filter: var(--material-card);
-  -webkit-backdrop-filter: var(--material-card);
-  border: 1px solid var(--separator);
-  box-shadow: var(--shadow-sm);
+  background:
+    radial-gradient(120% 80% at 100% 0%, var(--stat-soft), transparent 55%),
+    linear-gradient(165deg, color-mix(in srgb, var(--stat-soft) 85%, #ffffff) 0%, #ffffff 58%);
+  border: 1px solid var(--stat-border);
+  box-shadow: var(--shadow-sm), 0 8px 24px var(--stat-glow);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--stat-accent), color-mix(in srgb, var(--stat-accent) 40%, transparent));
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.stat-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md), 0 12px 28px var(--stat-glow);
+}
+
+.stat-card .meta-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--stat-soft) 70%, #ffffff);
+  border: 1px solid var(--stat-border);
+  color: var(--stat-accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .stat-card strong {
   display: block;
-  margin-top: 12px;
+  margin-top: 14px;
   font-size: var(--text-title-1);
   font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--label-primary);
 }
 
@@ -70,7 +113,7 @@
 .stat-card-inline {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid var(--separator);
+  border-top: 1px solid color-mix(in srgb, var(--stat-border) 80%, var(--separator));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -82,6 +125,7 @@
 .stat-card-inline b {
   color: var(--label-primary);
   font-size: 15px;
+  font-weight: 600;
 }
 
 .stat-card-inline b.profit-up {
@@ -90,6 +134,64 @@
 
 .stat-card-inline b.profit-down {
   color: var(--profit-down-text);
+}
+
+/* 五张卡片语义色（对齐 Apple system colors） */
+.stat-card.tone-status {
+  --stat-accent: var(--accent);
+  --stat-accent-text: var(--accent-text);
+  --stat-soft: var(--accent-soft);
+  --stat-border: rgba(0, 122, 255, 0.2);
+  --stat-glow: rgba(0, 122, 255, 0.1);
+}
+
+.stat-card.tone-capital {
+  --stat-accent: var(--indigo);
+  --stat-accent-text: var(--indigo-text);
+  --stat-soft: var(--indigo-soft);
+  --stat-border: rgba(88, 86, 214, 0.2);
+  --stat-glow: rgba(88, 86, 214, 0.1);
+}
+
+.stat-card.tone-position {
+  --stat-accent: var(--warning);
+  --stat-accent-text: var(--warning-text);
+  --stat-soft: var(--warning-soft);
+  --stat-border: rgba(255, 149, 0, 0.22);
+  --stat-glow: rgba(255, 149, 0, 0.1);
+}
+
+.stat-card.tone-cumulative {
+  --stat-accent: var(--teal);
+  --stat-accent-text: var(--teal-text);
+  --stat-soft: var(--teal-soft);
+  --stat-border: rgba(48, 176, 199, 0.22);
+  --stat-glow: rgba(48, 176, 199, 0.1);
+}
+
+.stat-card.tone-daily {
+  --stat-accent: var(--pink);
+  --stat-accent-text: var(--pink-text);
+  --stat-soft: var(--pink-soft);
+  --stat-border: rgba(255, 45, 85, 0.18);
+  --stat-glow: rgba(255, 45, 85, 0.08);
+}
+
+/* 无 color-mix 时的安全回退（旧 WebKit 仍可读） */
+@supports not (background: color-mix(in srgb, #000 50%, #fff)) {
+  .stat-card {
+    background:
+      radial-gradient(120% 80% at 100% 0%, var(--stat-soft), transparent 55%),
+      linear-gradient(165deg, #ffffff 0%, #fbfbfd 100%);
+  }
+
+  .stat-card .meta-label {
+    background: var(--stat-soft);
+  }
+
+  .stat-card-inline {
+    border-top-color: var(--separator);
+  }
 }
 
 /* —— 持仓/交易/委托面板 —— */

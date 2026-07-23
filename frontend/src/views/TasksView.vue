@@ -10,7 +10,7 @@
               </div>
               <div class="panel-head-actions">
                 <button
-                  class="button ghost small soft-header-button overview-refresh-button"
+                  class="button tinted small soft-header-button overview-refresh-button"
                   :class="{ 'is-loading': manualRunning && activeManualAction === 'analysis' }"
                   :disabled="manualRunning"
                   :title="manualRunButtonTitle"
@@ -19,7 +19,7 @@
                   {{ manualRunning && activeManualAction === 'analysis' ? '执行中…' : '执行分析' }}
                 </button>
                 <button
-                  class="button ghost small soft-header-button overview-refresh-button manual-trade-button"
+                  class="button primary small soft-header-button overview-refresh-button manual-trade-button"
                   :class="{ 'is-loading': manualRunning && activeManualAction === 'trade' }"
                   :disabled="manualRunning"
                   :title="manualTradeButtonTitle"
@@ -121,7 +121,7 @@
               <div v-if="selectedRun && !liveVisible" class="panel-head-actions">
                 <button
                   type="button"
-                  class="button ghost small soft-header-button overview-refresh-button"
+                  class="button danger small soft-header-button overview-refresh-button"
                   title="删除当前任务"
                   @click="handleDeleteRun(selectedRun.id)"
                 >

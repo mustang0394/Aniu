@@ -1,6 +1,27 @@
 <template>
   <article class="chat-message" :class="`role-${message.role}`">
-    <div class="chat-message-role">{{ roleLabel }}</div>
+    <div class="chat-message-head">
+      <div class="chat-message-role">{{ roleLabel }}</div>
+      <button
+        v-if="canCopy"
+        type="button"
+        class="chat-message-copy"
+        :class="{ 'is-copied': copyState === 'copied' }"
+        :disabled="streaming || copyState === 'copying'"
+        :aria-label="copyAriaLabel"
+        :title="copyTitle"
+        @click="handleCopy"
+      >
+        <svg v-if="copyState === 'copied'" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 13l4 4L19 7" />
+        </svg>
+        <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="9" width="11" height="11" rx="2" />
+          <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+        </svg>
+      </button>
+    </div>
+
     <div class="chat-message-body">
       <div v-if="toolCalls.length" class="chat-tool-call-card">
         <button
@@ -41,10 +62,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, defineComponent, h, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, defineComponent, h, onBeforeUnmount, ref, watch } from 'vue'
 
 import ChatAttachmentChip from './ChatAttachmentChip.vue'
 import type { ChatMessage, ChatToolCall } from '@/types'
+import { copyText } from '@/utils/clipboard'
 
 const MarkdownMessage = defineAsyncComponent({
   loader: () => import('./MarkdownMessage.vue'),
@@ -82,6 +104,52 @@ const displayContent = computed(() => {
   return ''
 })
 
+const canCopy = computed(() => {
+  if (props.message.role !== 'user' && props.message.role !== 'assistant') {
+    return false
+  }
+  return Boolean(props.message.content?.trim())
+})
+
+const copyState = ref<'idle' | 'copying' | 'copied' | 'failed'>('idle')
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null
+
+const copyAriaLabel = computed(() => {
+  if (copyState.value === 'copied') return '已复制'
+  if (copyState.value === 'failed') return '复制失败'
+  return '复制消息'
+})
+
+const copyTitle = computed(() => {
+  if (props.streaming) return '生成中，完成后可复制'
+  if (copyState.value === 'copied') return '已复制'
+  if (copyState.value === 'failed') return '复制失败，请重试'
+  return '复制消息'
+})
+
+async function handleCopy() {
+  if (props.streaming || !canCopy.value || copyState.value === 'copying') {
+    return
+  }
+
+  const text = props.message.content?.trim() ?? ''
+  if (!text) {
+    return
+  }
+
+  copyState.value = 'copying'
+  const ok = await copyText(text)
+  copyState.value = ok ? 'copied' : 'failed'
+
+  if (copyResetTimer !== null) {
+    clearTimeout(copyResetTimer)
+  }
+  copyResetTimer = setTimeout(() => {
+    copyState.value = 'idle'
+    copyResetTimer = null
+  }, 1600)
+}
+
 const toolCallsExpanded = ref(Boolean(props.streaming))
 
 watch(
@@ -103,4 +171,11 @@ function toolStatusText(tool: ChatToolCall): string {
   if (tool.status === 'running') return '调用中'
   return tool.ok === false ? '失败' : '完成'
 }
+
+onBeforeUnmount(() => {
+  if (copyResetTimer !== null) {
+    clearTimeout(copyResetTimer)
+    copyResetTimer = null
+  }
+})
 </script>

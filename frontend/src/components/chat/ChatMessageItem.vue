@@ -1,53 +1,79 @@
 <template>
-  <article class="chat-message" :class="`role-${message.role}`">
-    <div class="chat-message-head">
-      <div class="chat-message-role">{{ roleLabel }}</div>
+  <article
+    class="chat-message group relative max-w-[82%] px-3.5 py-3"
+    :class="{
+      'role-user self-end rounded-[18px_18px_4px_18px] bg-accent text-on-accent shadow-[0_2px_8px_rgba(0,122,255,0.22)]': message.role === 'user',
+      'role-assistant self-start rounded-[18px_18px_18px_4px] border border-separator bg-card-solid shadow-sm': message.role === 'assistant',
+      'role-system max-w-[min(100%,640px)] self-center px-3 py-1 shadow-none': message.role === 'system',
+    }"
+  >
+    <div class="mb-1.5 flex items-center justify-between gap-2">
+      <div
+        class="text-[11px] font-bold"
+        :class="{
+          'text-white/80': message.role === 'user',
+          'text-accent-text': message.role === 'assistant',
+          'text-label-tertiary': message.role === 'system',
+        }"
+      >
+        {{ roleLabel }}
+      </div>
       <button
         v-if="canCopy"
         type="button"
-        class="chat-message-copy"
-        :class="{ 'is-copied': copyState === 'copied' }"
+        class="inline-flex size-[26px] shrink-0 items-center justify-center rounded-[8px] transition-all"
+        :class="[
+          message.role === 'user'
+            ? 'text-white/75 hover:bg-white/15 hover:text-white'
+            : 'text-label-tertiary hover:bg-fill hover:text-accent-text',
+          copyState === 'copied' ? 'opacity-100 text-success-text' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-lg:opacity-100',
+        ]"
         :disabled="streaming || copyState === 'copying'"
         :aria-label="copyAriaLabel"
         :title="copyTitle"
         @click="handleCopy"
       >
-        <svg v-if="copyState === 'copied'" viewBox="0 0 24 24" aria-hidden="true">
+        <svg v-if="copyState === 'copied'" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M5 13l4 4L19 7" />
         </svg>
-        <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+        <svg v-else class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="9" y="9" width="11" height="11" rx="2" />
           <path d="M5 15V5a2 2 0 0 1 2-2h10" />
         </svg>
       </button>
     </div>
 
-    <div class="chat-message-body">
-      <div v-if="toolCalls.length" class="chat-tool-call-card">
+    <div class="leading-relaxed" :class="message.role === 'system' ? 'text-caption text-label-tertiary' : message.role === 'user' ? 'text-white' : 'text-label'">
+      <div v-if="toolCalls.length" class="mb-2.5 overflow-hidden rounded-[10px] border border-separator bg-accent-soft">
         <button
           type="button"
-          class="chat-tool-call-toggle"
+          class="flex w-full items-center justify-between gap-2.5 px-3 py-2.5 text-left text-caption font-semibold text-label hover:bg-accent/10"
           :aria-expanded="toolCallsExpanded"
           @click="toolCallsExpanded = !toolCallsExpanded"
         >
           <span>工具调用 {{ toolCalls.length }} 项</span>
-          <span class="chat-tool-call-toggle-icon">{{ toolCallsExpanded ? '收起' : '展开' }}</span>
+          <span class="font-medium text-accent-text">{{ toolCallsExpanded ? '收起' : '展开' }}</span>
         </button>
-
-        <ul v-show="toolCallsExpanded" class="chat-tool-calls">
+        <ul v-show="toolCallsExpanded" class="m-0 flex list-none flex-col gap-1 px-3 pb-3">
           <li
             v-for="(tool, ti) in toolCalls"
             :key="`${tool.tool_name}-${ti}`"
-            :class="toolStatusClass(tool)"
+            class="flex flex-wrap items-center gap-2 text-caption text-label-secondary"
           >
-            <span class="chat-tool-name">{{ tool.tool_name }}</span>
-            <span class="chat-tool-status">{{ toolStatusText(tool) }}</span>
-            <span v-if="tool.summary" class="chat-tool-summary">{{ tool.summary }}</span>
+            <span class="font-semibold text-accent-text">{{ tool.tool_name }}</span>
+            <span
+              :class="{
+                'text-warning': tool.status === 'running',
+                'text-success-text': tool.status !== 'running' && tool.ok !== false,
+                'text-danger-text': tool.status !== 'running' && tool.ok === false,
+              }"
+            >{{ toolStatusText(tool) }}</span>
+            <span v-if="tool.summary" class="basis-full text-[11px] text-label-tertiary">{{ tool.summary }}</span>
           </li>
         </ul>
       </div>
 
-      <div v-if="attachmentList.length" class="chat-message-attachments">
+      <div v-if="attachmentList.length" class="mb-2 flex flex-wrap gap-2">
         <ChatAttachmentChip
           v-for="attachment in attachmentList"
           :key="attachment.id"
@@ -56,7 +82,7 @@
       </div>
 
       <MarkdownMessage v-if="displayContent" :content="displayContent" />
-      <div v-else-if="streaming" class="chat-message-text is-placeholder">正在生成…</div>
+      <div v-else-if="streaming" class="italic text-label-tertiary">正在生成…</div>
     </div>
   </article>
 </template>

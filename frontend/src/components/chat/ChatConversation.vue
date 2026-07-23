@@ -1,47 +1,69 @@
 <template>
-  <section class="chat-conversation">
-    <header class="chat-conversation-head">
-      <div class="chat-conversation-title-wrap">
+  <section
+    class="flex h-[min(72vh,760px)] min-h-0 min-w-0 flex-col gap-3 overflow-hidden rounded-[16px] border border-separator p-3.5 shadow-sm glass-card"
+  >
+    <header class="flex items-center justify-between gap-3 border-b border-separator pb-2.5">
+      <div class="flex min-w-0 items-center gap-2.5">
         <button
           v-if="showSidebarToggle"
           type="button"
-          class="chat-mobile-open-sidebar"
+          class="inline-flex size-9 shrink-0 items-center justify-center rounded-[10px] border border-separator-strong bg-fill text-label-secondary transition-colors hover:bg-hover hover:text-label lg:hidden"
           aria-label="打开会话列表"
           @click="$emit('openSidebar')"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
+          <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
             <path d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
-        <h3 class="chat-conversation-title">{{ title }}</h3>
-
-        <span v-if="session" class="chat-conversation-meta">
+        <h3 class="m-0 truncate text-title-3 font-semibold text-label">{{ title }}</h3>
+        <span v-if="session" class="shrink-0 text-caption text-label-tertiary">
           {{ session.message_count || messages.length }} 条消息
         </span>
       </div>
     </header>
 
-    <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
+    <div
+      v-if="errorMessage"
+      class="rounded-[12px] border border-danger/25 bg-danger-soft px-3 py-2.5 text-footnote font-medium text-danger-text"
+      role="alert"
+    >
+      {{ errorMessage }}
+    </div>
 
-    <div ref="scrollRef" class="chat-message-list" @scroll="handleScroll">
+    <div
+      ref="scrollRef"
+      class="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto rounded-[12px] bg-gradient-to-b from-accent-soft/40 to-[#f7f8fa] px-2 py-2.5"
+      @scroll="handleScroll"
+    >
       <div
         v-if="session && messages.length > 0 && (hasMoreMessages || loadingOlderMessages)"
-        class="chat-load-older"
+        class="flex justify-center"
       >
         <button
           type="button"
-          class="button plain small"
+          class="h-8 rounded-pill px-3 text-footnote font-semibold text-accent-text hover:bg-accent-soft disabled:opacity-45"
           :disabled="loadingOlderMessages"
           @click="handleLoadOlder"
         >
           {{ loadingOlderMessages ? '加载中...' : '加载更早消息' }}
         </button>
       </div>
-      <div v-if="loading" class="empty-state chat-empty-state">加载会话中...</div>
-      <div v-else-if="!session" class="empty-state chat-empty-state">
+      <div
+        v-if="loading"
+        class="flex flex-1 items-center justify-center px-4 text-center text-footnote text-label-tertiary"
+      >
+        加载会话中...
+      </div>
+      <div
+        v-else-if="!session"
+        class="flex flex-1 items-center justify-center px-4 text-center text-footnote text-label-tertiary"
+      >
         直接输入并发送消息，即可自动开始一个新对话。
       </div>
-      <div v-else-if="messages.length === 0" class="empty-state chat-empty-state">
+      <div
+        v-else-if="messages.length === 0"
+        class="flex flex-1 items-center justify-center px-4 text-center text-footnote text-label-tertiary"
+      >
         {{ readOnly ? '当前持久会话暂无消息。' : '开始聊天吧。' }}
       </div>
       <template v-else>
@@ -52,7 +74,7 @@
           :streaming="isStreamingAssistant(message, index)"
         />
       </template>
-      <div ref="bottomRef" class="chat-scroll-anchor" aria-hidden="true"></div>
+      <div ref="bottomRef" class="h-px w-full shrink-0" aria-hidden="true"></div>
     </div>
 
     <ChatComposer

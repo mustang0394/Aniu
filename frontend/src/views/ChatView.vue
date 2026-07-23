@@ -1,57 +1,63 @@
 <template>
-  <div class="tab-content">
-    <section class="panel chat-panel">
-      <div class="panel-head">
-        <div class="head-main">
-          <h2>AI 聊天</h2>
-          <p class="section-kicker">AI Chat</p>
-        </div>
-      </div>
+  <div class="flex min-h-0 flex-col">
+    <UiPageHeader
+      class="!mb-4"
+      title="AI 聊天"
+      kicker="Chat"
+      description="与 Aniu 对话，支持附件与工具调用"
+    />
 
-      <div class="chat-workspace">
-        <div
-          class="chat-sidebar-backdrop"
-          :class="{ 'is-open': sidebarOpen }"
-          @click="sidebarOpen = false"
-          aria-hidden="true"
-        ></div>
-        <div class="chat-sidebar-wrap" :class="{ 'is-open': sidebarOpen }">
-          <ChatSessionSidebar
-            :sessions="sessions"
-            :persistent-session="persistentSession"
-            :persistent-selected="persistentSelected"
-            :current-session-id="currentSessionId"
-            :loading="sessionsLoading"
-            @select="handleSelect"
-            @select-persistent="handleSelectPersistent"
-            @create="handleCreate"
-            @delete="handleDelete"
-          />
-        </div>
+    <div class="relative grid min-h-[min(72vh,760px)] grid-cols-1 gap-3 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)]">
+      <!-- Mobile session backdrop -->
+      <div
+        class="fixed inset-0 z-40 glass-overlay lg:hidden"
+        :class="sidebarOpen ? 'block' : 'hidden'"
+        aria-hidden="true"
+        @click="sidebarOpen = false"
+      />
 
-        <ChatConversation
-          :session="persistentSelected ? persistentSession : currentSession"
-          :messages="persistentSelected ? persistentMessages : messages"
-          v-model="input"
-          :pending-attachments="pendingAttachments"
-          :sending="sending"
-          :loading="persistentSelected ? persistentLoading : loading"
-          :loading-older-messages="persistentSelected ? persistentLoadingOlder : loadingOlderMessages"
-          :has-more-messages="persistentSelected ? persistentHasMoreMessages : hasMoreMessages"
-          :can-send="persistentSelected ? false : canSend"
-          :error-message="persistentSelected ? persistentErrorMessage : errorMessage"
-          :read-only="persistentSelected"
-          :ensure-session-ready="ensureSessionReady"
-          :load-older-messages="persistentSelected ? loadOlderPersistentMessages : loadOlderMessages"
-          :show-sidebar-toggle="true"
-          @submit="handleSubmit"
-          @attach="addAttachment"
-          @remove-attachment="removeAttachment"
-          @upload-error="handleUploadError"
-          @open-sidebar="sidebarOpen = true"
+      <!-- Session sidebar -->
+      <div
+        class="z-50 flex min-h-0 flex-col max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:w-[min(280px,85vw)] max-lg:transition-transform max-lg:duration-200"
+        :class="sidebarOpen ? 'max-lg:translate-x-0' : 'max-lg:-translate-x-full lg:translate-x-0'"
+      >
+        <ChatSessionSidebar
+          class="h-full min-h-0"
+          :sessions="sessions"
+          :persistent-session="persistentSession"
+          :persistent-selected="persistentSelected"
+          :current-session-id="currentSessionId"
+          :loading="sessionsLoading"
+          @select="handleSelect"
+          @select-persistent="handleSelectPersistent"
+          @create="handleCreate"
+          @delete="handleDelete"
         />
       </div>
-    </section>
+
+      <ChatConversation
+        class="min-h-0 min-w-0"
+        :session="persistentSelected ? persistentSession : currentSession"
+        :messages="persistentSelected ? persistentMessages : messages"
+        v-model="input"
+        :pending-attachments="pendingAttachments"
+        :sending="sending"
+        :loading="persistentSelected ? persistentLoading : loading"
+        :loading-older-messages="persistentSelected ? persistentLoadingOlder : loadingOlderMessages"
+        :has-more-messages="persistentSelected ? persistentHasMoreMessages : hasMoreMessages"
+        :can-send="persistentSelected ? false : canSend"
+        :error-message="persistentSelected ? persistentErrorMessage : errorMessage"
+        :read-only="persistentSelected"
+        :ensure-session-ready="ensureSessionReady"
+        :load-older-messages="persistentSelected ? loadOlderPersistentMessages : loadOlderMessages"
+        :show-sidebar-toggle="true"
+        @submit="handleSubmit"
+        @attach="addAttachment"
+        @remove-attachment="removeAttachment"
+        @upload-error="handleUploadError"
+        @open-sidebar="sidebarOpen = true"
+      />
+    </div>
   </div>
 </template>
 
@@ -60,6 +66,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import ChatConversation from '@/components/chat/ChatConversation.vue'
 import ChatSessionSidebar from '@/components/chat/ChatSessionSidebar.vue'
+import UiPageHeader from '@/components/ui/UiPageHeader.vue'
 import { useChatSession } from '@/composables/useChatSession'
 import { useChatSessions } from '@/composables/useChatSessions'
 import { usePersistentSession } from '@/composables/usePersistentSession'

@@ -1,69 +1,79 @@
 <template>
-  <aside class="chat-session-sidebar">
-    <div class="chat-session-search-row">
+  <aside
+    class="flex h-full min-h-0 flex-col gap-2.5 overflow-hidden rounded-[16px] border border-separator p-3 shadow-sm glass-card"
+  >
+    <div class="flex items-center gap-2">
       <button
         type="button"
-        class="chat-new-button"
+        class="inline-flex size-9 shrink-0 items-center justify-center rounded-[10px] border border-accent/20 bg-accent-soft text-accent-text transition-colors hover:bg-accent/15 disabled:opacity-45"
         :disabled="creating"
         title="新建对话"
         @click="handleNew"
       >
-        <svg class="chat-new-button-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <svg class="size-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
           <path d="M12 7v10M7 12h10" />
         </svg>
       </button>
-
-      <div class="chat-session-search">
-        <input
-          v-model="query"
-          type="search"
-          placeholder="搜索对话"
-          class="chat-session-search-input"
-        />
-      </div>
+      <input
+        v-model="query"
+        type="search"
+        placeholder="搜索对话"
+        class="h-9 min-w-0 flex-1 rounded-[10px] border border-separator-strong bg-fill px-3 text-footnote text-label outline-none placeholder:text-label-quaternary focus:border-accent focus:bg-accent-soft/40 focus:ring-2 focus:ring-accent-ring"
+      />
     </div>
 
-    <div v-if="loading && !sessions.length && !persistentSession" class="chat-session-empty">加载中…</div>
+    <div
+      v-if="loading && !sessions.length && !persistentSession"
+      class="px-2 py-8 text-center text-footnote text-label-tertiary"
+    >
+      加载中…
+    </div>
 
-    <div class="chat-session-groups">
-      <section class="chat-session-group persistent-session-group">
-        <h4 class="chat-session-group-title">持久会话</h4>
-        <ul class="chat-session-list">
+    <div class="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-0.5">
+      <section>
+        <h4 class="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-label-tertiary">
+          持久会话
+        </h4>
+        <ul class="m-0 list-none space-y-1 p-0">
           <li
-            class="chat-session-item persistent-session-item"
-            :class="{ 'is-active': persistentSelected }"
+            class="flex cursor-pointer items-center gap-2 rounded-[10px] border border-dashed border-separator-strong px-2.5 py-2 transition-colors hover:bg-accent-soft"
+            :class="persistentSelected ? 'border-solid border-accent/30 bg-accent-soft' : ''"
             @click="$emit('selectPersistent')"
           >
-            <div class="chat-session-item-body">
-              <span class="chat-session-title">持久会话</span>
-              <span class="chat-session-meta">{{ persistentMeta }}</span>
+            <div class="min-w-0 flex-1">
+              <span class="block truncate text-footnote font-medium text-label">持久会话</span>
+              <span class="block truncate text-[11px] text-label-tertiary">{{ persistentMeta }}</span>
             </div>
           </li>
         </ul>
       </section>
 
-      <div v-if="!groupedSessions.length" class="chat-session-empty">
+      <div v-if="!groupedSessions.length" class="px-2 py-6 text-center text-footnote text-label-tertiary">
         点击左侧 + 号新建对话
       </div>
 
-      <section v-for="group in groupedSessions" :key="group.label" class="chat-session-group">
-        <h4 class="chat-session-group-title">{{ group.label }}</h4>
-        <ul class="chat-session-list">
+      <section v-for="group in groupedSessions" :key="group.label">
+        <h4 class="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-label-tertiary">
+          {{ group.label }}
+        </h4>
+        <ul class="m-0 list-none space-y-1 p-0">
           <li
             v-for="session in group.sessions"
             :key="session.id"
-            class="chat-session-item"
-            :class="{ 'is-active': session.id === currentSessionId }"
+            class="group flex cursor-pointer items-center gap-2 rounded-[10px] border border-transparent px-2.5 py-2 transition-colors hover:bg-accent-soft"
+            :class="session.id === currentSessionId ? 'border-accent/30 bg-accent-soft' : ''"
             @click="$emit('select', session.id)"
           >
-            <div class="chat-session-item-body">
-              <span class="chat-session-title">{{ session.title || '新对话' }}</span>
-              <span class="chat-session-meta">{{ formatTime(session.last_message_at ?? session.updated_at) }}</span>
+            <div class="min-w-0 flex-1">
+              <span class="block truncate text-footnote font-medium text-label">{{ session.title || '新对话' }}</span>
+              <span class="block truncate text-[11px] text-label-tertiary">
+                {{ formatTime(session.last_message_at ?? session.updated_at) }}
+              </span>
             </div>
-            <div class="chat-session-actions" @click.stop>
+            <div class="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-lg:opacity-100" @click.stop>
               <button
                 type="button"
-                class="chat-session-action danger"
+                class="rounded-md px-2 py-1 text-[11px] font-semibold text-label-tertiary hover:bg-danger-soft hover:text-danger-text"
                 title="删除"
                 @click="handleDelete(session)"
               >

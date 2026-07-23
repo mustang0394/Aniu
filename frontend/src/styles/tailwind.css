@@ -1,0 +1,135 @@
+@import "tailwindcss";
+@import "./theme.css";
+@import "./markdown.css";
+
+/* Global base — page canvas, reset helpers */
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #app {
+    margin: 0;
+    min-height: 100%;
+  }
+
+  body {
+    min-width: 320px;
+    font-family: var(--font-sans);
+    color: var(--color-label);
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(0, 122, 255, 0.06), transparent 60%),
+      radial-gradient(1000px 500px at 90% -5%, rgba(52, 199, 89, 0.05), transparent 55%),
+      linear-gradient(180deg, #fbfbfd 0%, var(--color-page) 320px);
+    line-height: 1.5;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  button,
+  input,
+  textarea,
+  select,
+  table {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  textarea {
+    resize: vertical;
+  }
+
+  ::selection {
+    background: rgba(0, 122, 255, 0.2);
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--color-accent);
+  }
+
+  /* Thin scrollbars */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.18);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.32);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Shared keyframes used by loading / live states */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-spin-slow {
+  animation: spin 0.8s linear infinite;
+}
+
+@utility animate-pulse-dot {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@utility animate-fade-in {
+  animation: fade-in-up 0.28s ease-out;
+}

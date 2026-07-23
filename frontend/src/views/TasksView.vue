@@ -1,277 +1,275 @@
 <template>
-<div class="tab-content">
-        <section class="content-grid content-grid-primary">
-          <!-- 记录选择区域 - 方块卡片式 -->
-          <section class="panel run-grid-panel">
-            <div class="panel-head">
-              <div class="head-main">
-                <h2>运行记录</h2>
-                <p class="section-kicker">Run History</p>
-              </div>
-              <div class="panel-head-actions">
-                <button
-                  class="button tinted small soft-header-button overview-refresh-button"
-                  :class="{ 'is-loading': manualRunning && activeManualAction === 'analysis' }"
-                  :disabled="manualRunning"
-                  :title="manualRunButtonTitle"
-                  @click="handleManualRun"
-                >
-                  {{ manualRunning && activeManualAction === 'analysis' ? '执行中…' : '执行分析' }}
-                </button>
-                <button
-                  class="button primary small soft-header-button overview-refresh-button manual-trade-button"
-                  :class="{ 'is-loading': manualRunning && activeManualAction === 'trade' }"
-                  :disabled="manualRunning"
-                  :title="manualTradeButtonTitle"
-                  @click="handleManualTrade"
-                >
-                  {{ manualRunning && activeManualAction === 'trade' ? '执行中…' : '执行交易' }}
-                </button>
-              </div>
+  <div class="space-y-5 sm:space-y-6">
+    <UiPageHeader title="AI 分析" kicker="Analysis" description="手动执行分析/交易，并查看历史运行详情">
+      <UiButton
+        variant="tinted"
+        size="sm"
+        :loading="manualRunning && activeManualAction === 'analysis'"
+        :disabled="manualRunning"
+        :title="manualRunButtonTitle"
+        @click="handleManualRun"
+      >
+        {{ manualRunning && activeManualAction === 'analysis' ? '执行中…' : '执行分析' }}
+      </UiButton>
+      <UiButton
+        variant="primary"
+        size="sm"
+        :loading="manualRunning && activeManualAction === 'trade'"
+        :disabled="manualRunning"
+        :title="manualTradeButtonTitle"
+        @click="handleManualTrade"
+      >
+        {{ manualRunning && activeManualAction === 'trade' ? '执行中…' : '执行交易' }}
+      </UiButton>
+    </UiPageHeader>
+
+    <UiPanel title="运行记录" kicker="Run History">
+      <div
+        v-if="analysisError"
+        class="mb-4 rounded-[12px] border border-danger/25 bg-danger-soft px-4 py-3 text-body font-medium text-danger-text"
+        role="alert"
+      >
+        {{ analysisError }}
+      </div>
+
+      <div class="space-y-5">
+        <section>
+          <div class="mb-2.5 flex items-center justify-between gap-2">
+            <span class="text-caption font-semibold uppercase tracking-[0.08em] text-label-tertiary">今日</span>
+          </div>
+          <div v-if="todayRuns.length || livePlaceholderVisible" class="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+            <button
+              v-if="livePlaceholderVisible"
+              type="button"
+              class="run-card live"
+              :class="{ active: liveFocused }"
+              @click="focusLiveCard"
+            >
+              <span class="status-dot animate-pulse-dot bg-accent" />
+              <span class="run-type">{{ liveRunTypeLabel }}</span>
+              <span class="run-time">{{ formatShortTime(liveStartedAtIso) }}</span>
+              <span class="run-duration">{{ liveElapsed }}</span>
+            </button>
+            <button
+              v-for="run in todayRuns"
+              :key="run.id"
+              type="button"
+              class="run-card"
+              :class="{ active: isTodayRunActive(run.id), live: isTodayRunLive(run.id) }"
+              @click="handleTodayRunSelect(run.id)"
+            >
+              <span
+                class="status-dot"
+                :class="isTodayRunLive(run.id) ? 'animate-pulse-dot bg-accent' : statusDotClass(run.status)"
+              />
+              <span class="run-type">{{ run.analysisType }}</span>
+              <span class="run-time">{{ formatShortTime(run.startTime) }}</span>
+              <span class="run-duration">{{ run.duration }}</span>
+            </button>
+          </div>
+          <p v-else class="m-0 rounded-[12px] bg-fill/50 px-4 py-6 text-center text-footnote text-label-tertiary">
+            今日暂无运行记录。
+          </p>
+        </section>
+
+        <section>
+          <div class="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+            <span class="text-caption font-semibold uppercase tracking-[0.08em] text-label-tertiary">历史</span>
+            <div class="relative">
+              <button
+                type="button"
+                class="inline-flex h-9 items-center rounded-pill border border-separator-strong bg-card-solid px-3.5 text-footnote font-semibold text-label-secondary hover:bg-hover"
+                @click="openHistoryDatePicker"
+              >
+                {{ historyDateDisplay }}
+              </button>
+              <input
+                ref="historyDateInput"
+                type="date"
+                v-model="selectedDate"
+                class="pointer-events-none absolute inset-0 opacity-0"
+                tabindex="-1"
+                aria-hidden="true"
+                @change="loadHistoryRuns"
+              />
             </div>
-
-            <div v-if="analysisError" class="error-banner">{{ analysisError }}</div>
-
-            <div class="runs-container">
-              <!-- 今日运行 - 方块网格 -->
-              <div class="run-group" v-if="todayRuns.length || livePlaceholderVisible">
-                <div class="group-label">
-                  <span class="label-text">今日</span>
-                </div>
-                <div class="run-grid" v-if="todayRuns.length || livePlaceholderVisible">
-                  <div
-                    v-if="livePlaceholderVisible"
-                    class="run-card live-run-card"
-                    :class="{ active: liveFocused }"
-                    @click="focusLiveCard"
-                  >
-                    <div class="run-card-status dot-running"></div>
-                    <div class="run-card-type">{{ liveRunTypeLabel }}</div>
-                    <div class="run-card-time">{{ formatShortTime(liveStartedAtIso) }}</div>
-                    <div class="run-card-duration">{{ liveElapsed }}</div>
-                  </div>
-                   <div
-                      v-for="run in todayRuns"
-                       :key="run.id"
-                       class="run-card"
-                       :class="{ active: isTodayRunActive(run.id), 'live-run-card': isTodayRunLive(run.id) }"
-                       @click="handleTodayRunSelect(run.id)"
-                     >
-                     <div class="run-card-status" :class="isTodayRunLive(run.id) ? 'dot-running' : statusTone(run.status)"></div>
-                     <div class="run-card-type">{{ run.analysisType }}</div>
-                     <div class="run-card-time">{{ formatShortTime(run.startTime) }}</div>
-                     <div class="run-card-duration">{{ run.duration }}</div>
-                    </div>
-                </div>
-                <div v-else class="run-grid-empty">
-                  今日暂无可展示的运行记录。
-                </div>
-              </div>
-              <div v-else class="run-grid-empty">
-                今日暂无运行记录。
-              </div>
-
-              <!-- 历史记录 - 日期选择 + 方块网格 -->
-              <div class="run-group">
-                <div class="group-label">
-                  <span class="label-text">历史</span>
-                  <div class="group-label-meta">
-                    <button type="button" class="button ghost small soft-header-button date-input-trigger" @click="openHistoryDatePicker">
-                      <span class="date-input-value">{{ historyDateDisplay }}</span>
-                    </button>
-                    <input
-                      ref="historyDateInput"
-                      type="date"
-                      v-model="selectedDate"
-                      @change="loadHistoryRuns"
-                      class="date-input-native"
-                      tabindex="-1"
-                      aria-hidden="true"
-                    />
-                  </div>
-                </div>
-                <div class="run-grid" v-if="historyRuns.length">
-                  <div 
-                     v-for="run in historyRuns" 
-                      :key="run.id"
-                      class="run-card"
-                      :class="{ active: !liveFocused && selectedRun?.id === run.id }"
-                      @click="handleSelectRun(run.id, historyRuns)"
-                    >
-                     <div class="run-card-status" :class="statusTone(run.status)"></div>
-                     <div class="run-card-type">{{ run.analysisType }}</div>
-                     <div class="run-card-time">{{ formatShortTime(run.startTime) }}</div>
-                     <div class="run-card-duration">{{ run.duration }}</div>
-                   </div>
-                </div>
-                <div v-if="selectedDate && !historyRuns.length" class="run-grid-empty">
-                  该日期没有找到运行记录，请切换日期后重试。
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- 分析详情内容区域 - 三列布局 -->
-          <section class="panel analysis-panel">
-            <div class="panel-head">
-              <div class="head-main">
-                <h2>分析详情</h2>
-                <p class="section-kicker">Analysis Detail</p>
-              </div>
-              <div v-if="selectedRun && !liveVisible" class="panel-head-actions">
-                <button
-                  type="button"
-                  class="button danger small soft-header-button overview-refresh-button"
-                  title="删除当前任务"
-                  @click="handleDeleteRun(selectedRun.id)"
-                >
-                  删除任务
-                </button>
-              </div>
-            </div>
-
-            <!-- 三列详情网格 -->
-            <div class="detail-grid" v-if="detailGridVisible">
-              <!-- 第一列：运行状态 -->
-              <div class="detail-column status-column">
-                <h4 class="column-title">运行状态</h4>
-                <div class="detail-column-body">
-                  <div class="stat-compact">
-                    <div class="stat-main">
-                      <span class="time-value">{{ formatTime(displayStatusStartTime) }}</span>
-                      <span class="duration-value">{{ displayStatusDuration }}</span>
-                      <span class="status-dot" :class="displayStatusDotClass"></span>
-                    </div>
-                    <div v-if="displayTokenBarVisible" class="token-row">
-                      <span class="token-item">
-                        <i>输入</i>
-                        <b>{{ displayInputTokens }}</b>
-                      </span>
-                      <span class="token-item">
-                        <i>输出</i>
-                        <b>{{ displayOutputTokens }}</b>
-                      </span>
-                      <span class="token-item total">
-                        <i>总量</i>
-                        <b>{{ displayTotalTokens }}</b>
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 第二列：接口调用 -->
-              <div class="detail-column api-column">
-                <h4 class="column-title">接口调用 ({{ displayApiDetails.length }})</h4>
-                <div class="detail-column-body">
-                  <div
-                    v-if="displayApiDetails.length"
-                    ref="apiListRef"
-                    class="compact-list analysis-compact-list stream-list-shell"
-                    @scroll="handleApiListScroll"
-                  >
-                    <TransitionGroup name="stream-reveal" tag="div" class="stream-list-group">
-                      <button
-                        v-for="(api, idx) in displayApiDetails"
-                        :key="getApiItemKey(api, idx)"
-                        type="button"
-                        class="compact-item api-item compact-item-button"
-                        :class="{ active: !liveVisible && activePreviewIndex === api.preview_index && api.preview_index !== null }"
-                        @click="focusPreview(api.preview_index)"
-                      >
-                        <div class="compact-main api-main">
-                          <span class="item-name" :title="api.name">{{ api.name }}</span>
-                          <span class="item-summary" :title="api.summary">{{ api.summary }}</span>
-                        </div>
-                        <span class="compact-item-status-dot" :class="getApiItemStatusClass(api)" aria-hidden="true"></span>
-                      </button>
-                    </TransitionGroup>
-                  </div>
-                  <div v-else-if="liveVisible || selectedRun?.detailLoaded" class="detail-empty-state">
-                    {{ displayApiEmptyText }}
-                  </div>
-                </div>
-              </div>
-
-              <!-- 第三列：交易执行 -->
-              <div class="detail-column trade-column">
-                <h4 class="column-title">交易执行 ({{ displayTradeDetails.length }})</h4>
-                <div class="detail-column-body">
-                  <div
-                    v-if="displayTradeDetails.length"
-                    ref="tradeListRef"
-                    class="compact-list analysis-compact-list stream-list-shell"
-                    @scroll="handleTradeListScroll"
-                  >
-                    <TransitionGroup name="stream-reveal" tag="div" class="stream-list-group">
-                      <button
-                        v-for="(trade, idx) in displayTradeDetails"
-                        :key="getTradeItemKey(trade, idx)"
-                        type="button"
-                        class="compact-item trade-item compact-item-button"
-                        :class="{ active: !liveVisible && activePreviewIndex === trade.preview_index && trade.preview_index !== null }"
-                        @click="focusPreview(trade.preview_index)"
-                      >
-                        <div class="compact-main trade-main">
-                          <span class="trade-text-action" :class="trade.action">{{ trade.action_text }}</span>
-                          <span class="trade-text-summary" :title="trade.summary">{{ trade.summary }}</span>
-                        </div>
-                        <span class="compact-item-status-dot" :class="getTradeItemStatusClass(trade)" aria-hidden="true"></span>
-                      </button>
-                    </TransitionGroup>
-                  </div>
-                  <div v-else-if="liveVisible || selectedRun?.detailLoaded" class="detail-empty-state">
-                    {{ displayTradeEmptyText }}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="selectedRunLoading && !liveVisible" class="detail-empty-state">
-              正在加载本次运行详情...
-            </div>
-
-             <!-- 分析输出内容 / 原始返回联动预览 / 实时结论 -->
-             <div class="output-section" v-if="liveVisible || selectedRun?.output || activePreview">
-               <div class="output-surface" @click="handleOutputSurfaceClick">
-                  <div
-                    v-if="liveVisible && liveOutputIsPlaceholder"
-                    ref="liveOutputRef"
-                    class="live-output-content"
-                    :class="{ 'is-placeholder': liveOutputIsPlaceholder }"
-                    @scroll="handleLiveOutputScroll"
-                  >
-                    {{ liveOutputText }}
-                  </div>
-                   <div
-                     v-else-if="liveVisible"
-                     ref="liveOutputRef"
-                     class="markdown-content live-markdown-content"
-                     @scroll="handleLiveOutputScroll"
-                     v-html="liveOutputHtml"
-                   ></div>
-                   <div v-else-if="activePreview" class="raw-output-content" :class="{ 'is-loading': activePreviewLoading }">
-                     {{ activePreviewText }}
-                   </div>
-                 <div v-else-if="renderedOutputLoading" class="detail-empty-state">
-                   正在渲染分析输出...
-                 </div>
-                 <div v-else class="markdown-content" v-html="renderedOutputHtml"></div>
-               </div>
-              </div>
-
-            <div v-if="runErrorVisible" class="error-banner">
-              {{ runErrorMessage }}
-            </div>
-
-            <!-- 无数据提示 -->
-            <div v-if="!detailGridVisible && !selectedRunLoading" class="empty-state">
-              <p>当前没有可展示的运行详情。完成一次任务执行后，这里会显示完整分析结果。</p>
-            </div>
-          </section>
+          </div>
+          <div v-if="historyRuns.length" class="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+            <button
+              v-for="run in historyRuns"
+              :key="run.id"
+              type="button"
+              class="run-card"
+              :class="{ active: !liveFocused && selectedRun?.id === run.id }"
+              @click="handleSelectRun(run.id, historyRuns)"
+            >
+              <span class="status-dot" :class="statusDotClass(run.status)" />
+              <span class="run-type">{{ run.analysisType }}</span>
+              <span class="run-time">{{ formatShortTime(run.startTime) }}</span>
+              <span class="run-duration">{{ run.duration }}</span>
+            </button>
+          </div>
+          <p v-else-if="selectedDate" class="m-0 rounded-[12px] bg-fill/50 px-4 py-6 text-center text-footnote text-label-tertiary">
+            该日期没有找到运行记录，请切换日期后重试。
+          </p>
         </section>
       </div>
+    </UiPanel>
+
+    <UiPanel title="分析详情" kicker="Analysis Detail">
+      <template #actions>
+        <UiButton
+          v-if="selectedRun && !liveVisible"
+          variant="danger-soft"
+          size="sm"
+          title="删除当前任务"
+          @click="handleDeleteRun(selectedRun.id)"
+        >
+          删除任务
+        </UiButton>
+      </template>
+
+      <div v-if="detailGridVisible" class="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <!-- Status -->
+        <div class="rounded-[16px] border border-separator bg-fill/40 p-4">
+          <h4 class="m-0 mb-3 text-footnote font-semibold uppercase tracking-wide text-label-tertiary">运行状态</h4>
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="text-callout font-semibold tabular-nums text-label">{{ formatTime(displayStatusStartTime) }}</span>
+            <span class="text-body text-label-secondary">{{ displayStatusDuration }}</span>
+            <span class="status-dot" :class="displayStatusDotTailwind" />
+          </div>
+          <div v-if="displayTokenBarVisible" class="mt-3 flex flex-wrap gap-2">
+            <span class="token-chip"><i>输入</i><b>{{ displayInputTokens }}</b></span>
+            <span class="token-chip"><i>输出</i><b>{{ displayOutputTokens }}</b></span>
+            <span class="token-chip emphasis"><i>总量</i><b>{{ displayTotalTokens }}</b></span>
+          </div>
+        </div>
+
+        <!-- API calls -->
+        <div class="flex min-h-[200px] flex-col rounded-[16px] border border-separator bg-fill/40 p-4">
+          <h4 class="m-0 mb-3 text-footnote font-semibold uppercase tracking-wide text-label-tertiary">
+            接口调用 ({{ displayApiDetails.length }})
+          </h4>
+          <div
+            v-if="displayApiDetails.length"
+            ref="apiListRef"
+            class="max-h-56 flex-1 space-y-1 overflow-y-auto pr-1"
+            @scroll="handleApiListScroll"
+          >
+            <TransitionGroup name="stream-reveal" tag="div" class="space-y-1">
+              <button
+                v-for="(api, idx) in displayApiDetails"
+                :key="getApiItemKey(api, idx)"
+                type="button"
+                class="detail-item"
+                :class="{ active: !liveVisible && activePreviewIndex === api.preview_index && api.preview_index !== null }"
+                @click="focusPreview(api.preview_index)"
+              >
+                <div class="min-w-0 flex-1">
+                  <span class="block truncate text-footnote font-semibold text-label" :title="api.name">{{ api.name }}</span>
+                  <span class="block truncate text-caption text-label-tertiary" :title="api.summary">{{ api.summary }}</span>
+                </div>
+                <span class="status-dot shrink-0" :class="apiStatusDot(api)" aria-hidden="true" />
+              </button>
+            </TransitionGroup>
+          </div>
+          <p v-else-if="liveVisible || selectedRun?.detailLoaded" class="m-0 text-footnote text-label-tertiary">
+            {{ displayApiEmptyText }}
+          </p>
+        </div>
+
+        <!-- Trades -->
+        <div class="flex min-h-[200px] flex-col rounded-[16px] border border-separator bg-fill/40 p-4">
+          <h4 class="m-0 mb-3 text-footnote font-semibold uppercase tracking-wide text-label-tertiary">
+            交易执行 ({{ displayTradeDetails.length }})
+          </h4>
+          <div
+            v-if="displayTradeDetails.length"
+            ref="tradeListRef"
+            class="max-h-56 flex-1 space-y-1 overflow-y-auto pr-1"
+            @scroll="handleTradeListScroll"
+          >
+            <TransitionGroup name="stream-reveal" tag="div" class="space-y-1">
+              <button
+                v-for="(trade, idx) in displayTradeDetails"
+                :key="getTradeItemKey(trade, idx)"
+                type="button"
+                class="detail-item"
+                :class="{ active: !liveVisible && activePreviewIndex === trade.preview_index && trade.preview_index !== null }"
+                @click="focusPreview(trade.preview_index)"
+              >
+                <div class="min-w-0 flex-1">
+                  <span
+                    class="text-footnote font-semibold"
+                    :class="trade.action === 'buy' ? 'text-profit-up-text' : trade.action === 'sell' ? 'text-profit-down-text' : 'text-label'"
+                  >{{ trade.action_text }}</span>
+                  <span class="mt-0.5 block truncate text-caption text-label-tertiary" :title="trade.summary">{{ trade.summary }}</span>
+                </div>
+                <span class="status-dot shrink-0" :class="tradeStatusDot(trade)" aria-hidden="true" />
+              </button>
+            </TransitionGroup>
+          </div>
+          <p v-else-if="liveVisible || selectedRun?.detailLoaded" class="m-0 text-footnote text-label-tertiary">
+            {{ displayTradeEmptyText }}
+          </p>
+        </div>
+      </div>
+
+      <p v-if="selectedRunLoading && !liveVisible" class="mt-4 text-footnote text-label-tertiary">
+        正在加载本次运行详情...
+      </p>
+
+      <div v-if="liveVisible || selectedRun?.output || activePreview" class="mt-4">
+        <div
+          class="output-surface min-h-[240px] max-h-[min(70vh,720px)] overflow-y-auto rounded-[16px] border border-separator bg-card-solid p-4 shadow-sm"
+          @click="handleOutputSurfaceClick"
+        >
+          <div
+            v-if="liveVisible && liveOutputIsPlaceholder"
+            ref="liveOutputRef"
+            class="whitespace-pre-wrap text-body text-label-tertiary italic"
+            @scroll="handleLiveOutputScroll"
+          >
+            {{ liveOutputText }}
+          </div>
+          <div
+            v-else-if="liveVisible"
+            ref="liveOutputRef"
+            class="markdown-body"
+            @scroll="handleLiveOutputScroll"
+            v-html="liveOutputHtml"
+          />
+          <div
+            v-else-if="activePreview"
+            class="whitespace-pre-wrap break-words font-mono text-footnote leading-relaxed text-label"
+            :class="{ 'opacity-60': activePreviewLoading }"
+          >
+            {{ activePreviewText }}
+          </div>
+          <p v-else-if="renderedOutputLoading" class="m-0 text-footnote text-label-tertiary">
+            正在渲染分析输出...
+          </p>
+          <div v-else class="markdown-body" v-html="renderedOutputHtml" />
+        </div>
+      </div>
+
+      <div
+        v-if="runErrorVisible"
+        class="mt-4 rounded-[12px] border border-danger/25 bg-danger-soft px-4 py-3 text-body font-medium text-danger-text"
+      >
+        {{ runErrorMessage }}
+      </div>
+
+      <UiEmpty
+        v-if="!detailGridVisible && !selectedRunLoading"
+        class="mt-4"
+        title="暂无运行详情"
+        description="当前没有可展示的运行详情。完成一次任务执行后，这里会显示完整分析结果。"
+      />
+    </UiPanel>
+  </div>
 </template>
+
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
@@ -282,6 +280,10 @@ import { api } from '@/services/api'
 import { useAppStore } from '@/stores/legacy'
 import { formatShortTime, formatTime, statusTone } from '@/utils/formatters'
 import type { ApiDetail, TradeDetail } from '@/types'
+import UiButton from '@/components/ui/UiButton.vue'
+import UiEmpty from '@/components/ui/UiEmpty.vue'
+import UiPageHeader from '@/components/ui/UiPageHeader.vue'
+import UiPanel from '@/components/ui/UiPanel.vue'
 
 const LIVE_MARKDOWN_RENDER_MIN_INTERVAL_MS = 32
 const LIVE_OUTPUT_LOADING_HTML = '<p class="live-output-loading">正在生成最终结论...</p>'
@@ -977,230 +979,88 @@ onBeforeUnmount(() => {
   resetLiveMarkdownRenderState()
 })
 
+
+function mapStatusDot(cls: string) {
+  if (cls.includes('running') || cls.includes('tone-info') || cls.includes('info')) {
+    return 'animate-pulse-dot bg-accent'
+  }
+  if (cls.includes('success')) return 'bg-success'
+  if (cls.includes('failed') || cls.includes('error') || cls.includes('danger')) return 'bg-danger'
+  if (cls.includes('warning')) return 'bg-warning'
+  return 'bg-label-quaternary'
+}
+
+function statusDotClass(status: string | null | undefined) {
+  return mapStatusDot(statusTone(status ?? 'idle'))
+}
+
+const displayStatusDotTailwind = computed(() => mapStatusDot(displayStatusDotClass.value))
+
+function apiStatusDot(api: ApiDetail) {
+  return mapStatusDot(getApiItemStatusClass(api))
+}
+
+function tradeStatusDot(trade: TradeDetail) {
+  return mapStatusDot(getTradeItemStatusClass(trade))
+}
+
 </script>
 
 <style scoped>
-.manual-trade-button {
-  margin-left: 5px;
+@reference "../styles/tailwind.css";
+
+.run-card {
+  @apply relative flex min-h-[72px] flex-col items-start gap-0.5 rounded-[14px] border border-separator bg-card-solid px-3 py-2.5 text-left shadow-sm transition-all;
+  @apply hover:border-accent/30 hover:bg-accent-soft/40;
+}
+.run-card.active {
+  @apply border-accent/40 bg-accent-soft ring-2 ring-accent-ring;
+}
+.run-card.live {
+  @apply border-accent/30;
+}
+.run-type {
+  @apply mt-1 text-caption font-semibold text-label;
+}
+.run-time {
+  @apply text-footnote font-semibold tabular-nums text-label;
+}
+.run-duration {
+  @apply text-caption text-label-tertiary;
+}
+.status-dot {
+  @apply inline-block size-2 rounded-full;
+}
+.token-chip {
+  @apply inline-flex items-center gap-1.5 rounded-pill bg-card-solid px-2.5 py-1 text-caption text-label-secondary ring-1 ring-separator;
+}
+.token-chip i {
+  @apply not-italic text-label-tertiary;
+}
+.token-chip b {
+  @apply font-semibold tabular-nums text-label;
+}
+.token-chip.emphasis {
+  @apply text-accent-text ring-accent/20;
+}
+.token-chip.emphasis b {
+  @apply text-accent-text;
+}
+.detail-item {
+  @apply flex w-full items-center gap-2 rounded-[12px] border border-transparent bg-card-solid px-3 py-2.5 text-left transition-colors;
+  @apply hover:bg-hover;
+}
+.detail-item.active {
+  @apply border-accent/30 bg-accent-soft;
 }
 
-.compact-item-button {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 25px;
-  padding: 5px 8px;
-  box-sizing: border-box;
-  border: none;
-  background: var(--bg-fill);
-  border-radius: 4px;
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-  font-size: 10px;
-  line-height: 1.25;
-  color: inherit;
-  appearance: none;
-  -webkit-appearance: none;
+.stream-reveal-enter-active,
+.stream-reveal-leave-active {
+  transition: all 0.2s ease;
 }
-
-.compact-item-button:hover {
-  background: var(--bg-fill);
-}
-
-.compact-item-button.active {
-  box-shadow: none;
-}
-
-.compact-item-button.active .item-name,
-.compact-item-button.active .trade-text-action {
-  color: var(--label-primary);
-}
-
-.compact-item-button.active .item-summary,
-.compact-item-button.active .trade-text-summary {
-  color: var(--label-secondary);
-}
-
-.compact-item-button .item-name,
-.compact-item-button .trade-text-action {
-  font-size: 10.5px;
-  line-height: 1.2;
-}
-
-.compact-item-button .item-summary,
-.compact-item-button .trade-text-summary {
-  font-size: 10px;
-  line-height: 1.2;
-}
-
-.analysis-compact-list {
-  height: calc(25px * 3 + 4px * 2);
-  min-height: calc(25px * 3 + 4px * 2);
-}
-
-.stream-list-shell {
-  padding-right: 2px;
-}
-
-.stream-list-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 100%;
-}
-
-.stream-reveal-enter-active {
-  transition:
-    opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    filter 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1);
-  transform-origin: left center;
-}
-
-.stream-reveal-enter-from {
+.stream-reveal-enter-from,
+.stream-reveal-leave-to {
   opacity: 0;
-  transform: translateY(10px) scale(0.92);
-  filter: saturate(0.72) brightness(0.95);
-  box-shadow: 0 0 0 var(--bg-fill);
-}
-
-.stream-reveal-enter-to {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  filter: saturate(1) brightness(1);
-  box-shadow: 0 10px 22px var(--bg-fill);
-}
-
-.stream-reveal-move {
-  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.compact-item-status-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  align-self: center;
-  border-radius: 999px;
-  background: rgba(52, 199, 89, 0.92);
-}
-
-.compact-item-status-dot.is-running {
-  background: var(--success);
-  animation: live-pulse 1.4s ease-in-out infinite;
-}
-
-.compact-item-status-dot.is-success {
-  background: rgba(52, 199, 89, 0.96);
-}
-
-.compact-item-status-dot.is-failed {
-  background: rgba(255, 59, 48, 0.96);
-}
-
-.trade-text-summary {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: block;
-  -webkit-line-clamp: unset;
-  -webkit-box-orient: unset;
-}
-
-.output-surface {
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  padding: 12px;
-  overflow: hidden;
-  height: 700px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 8px;
-  background: var(--bg-fill);
-}
-
-.markdown-content {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-
-.markdown-content:hover {
-  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
-}
-
-.markdown-content::-webkit-scrollbar {
-  width: 5px;
-}
-
-.markdown-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.markdown-content::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.125);
-  border-radius: 10px;
-}
-
-.markdown-content:hover::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.225);
-}
-
-.markdown-content :deep(p:first-child) {
-  margin-top: 0;
-}
-
-.markdown-content :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.live-markdown-content :deep(.live-output-loading) {
-  margin: 0;
-  color: var(--label-tertiary);
-}
-
-.raw-output-content {
-  flex: 1 1 auto;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-  color: var(--label-primary);
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.raw-output-content:hover {
-  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
-}
-
-.raw-output-content::-webkit-scrollbar {
-  width: 5px;
-}
-
-.raw-output-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.raw-output-content::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.125);
-  border-radius: 10px;
-}
-
-.raw-output-content:hover::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.225);
-}
-
-.output-surface > .detail-empty-state {
-  flex: 1 1 auto;
-  min-height: 0;
+  transform: translateY(4px);
 }
 </style>

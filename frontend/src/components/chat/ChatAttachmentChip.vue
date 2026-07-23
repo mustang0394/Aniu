@@ -1,9 +1,12 @@
 <template>
-  <div class="chat-attachment-chip" :class="{ 'is-image': isImage }">
+  <div
+    class="flex max-w-[240px] items-center gap-1.5 rounded-[8px] border border-separator-strong bg-fill p-1"
+    :class="{ 'is-image': isImage }"
+  >
     <button
       type="button"
-      class="chat-attachment-open"
-      :class="{ 'is-loading': loadingPreview || opening }"
+      class="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent px-1 py-0.5 text-left text-inherit"
+      :class="loadingPreview || opening ? 'cursor-wait' : 'cursor-pointer'"
       :title="attachment.filename"
       @click="openAttachment"
     >
@@ -11,16 +14,19 @@
         v-if="isImage && previewUrl"
         :src="previewUrl"
         :alt="attachment.filename"
-        class="chat-attachment-thumb"
+        class="size-[52px] shrink-0 rounded-md object-cover"
       />
-      <span v-else-if="isImage" class="chat-attachment-thumb chat-attachment-thumb-placeholder">
+      <span
+        v-else-if="isImage"
+        class="inline-flex size-[52px] shrink-0 items-center justify-center rounded-md bg-accent-soft text-body font-bold text-accent-text"
+      >
         图
       </span>
-      <span v-else class="chat-attachment-icon">📄</span>
+      <span v-else class="shrink-0 text-[22px]">📄</span>
 
-      <div class="chat-attachment-meta">
-        <span class="chat-attachment-name" :title="attachment.filename">{{ attachment.filename }}</span>
-        <span class="chat-attachment-size">
+      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span class="truncate text-caption text-label" :title="attachment.filename">{{ attachment.filename }}</span>
+        <span class="text-[11px] text-label-tertiary">
           {{ loadingPreview ? '加载中…' : formatSize(attachment.size) }}
         </span>
       </div>
@@ -29,7 +35,7 @@
     <button
       v-if="removable"
       type="button"
-      class="chat-attachment-remove"
+      class="rounded px-2 py-0.5 text-base leading-none text-label-tertiary hover:bg-danger-soft hover:text-danger-text"
       title="移除"
       @click.stop="$emit('remove', attachment.id)"
     >

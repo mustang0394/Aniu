@@ -1,5 +1,8 @@
 <template>
-  <aside class="flex h-full w-full flex-col border-r border-separator glass-nav">
+  <aside
+    class="flex h-full w-full flex-col border-r border-separator"
+    :class="surface === 'solid' ? 'bg-white' : 'glass-nav'"
+  >
     <!-- Brand -->
     <div class="flex items-center gap-3 px-5 pb-5 pt-6">
       <img
@@ -27,7 +30,7 @@
         <li v-for="item in appNavigation" :key="item.id">
           <router-link
             :to="item.path"
-            class="group flex items-center gap-3 rounded-[12px] px-3 py-[11px] text-callout font-medium transition-colors duration-150"
+            class="group flex items-center gap-3 rounded-[12px] px-3 py-[11px] text-callout font-medium leading-none transition-colors duration-150"
             :class="
               isActive(item.path)
                 ? 'bg-accent-soft text-accent-text shadow-sm'
@@ -36,16 +39,16 @@
             @click="emit('navigate')"
           >
             <span
-              class="flex size-8 items-center justify-center rounded-[10px] transition-colors"
+              class="inline-flex size-8 shrink-0 items-center justify-center rounded-[10px] leading-none transition-colors"
               :class="
                 isActive(item.path)
-                  ? 'bg-accent text-on-accent shadow-sm'
+                  ? 'bg-accent text-on-accent'
                   : 'bg-fill text-label-secondary group-hover:text-label'
               "
             >
               <NavIcon :name="item.icon" />
             </span>
-            <span class="truncate">{{ item.name }}</span>
+            <span class="truncate leading-normal">{{ item.name }}</span>
           </router-link>
         </li>
       </ul>
@@ -85,6 +88,17 @@ import { useRoute } from 'vue-router'
 import appPackage from '../../../package.json'
 import { appNavigation } from '@/config/navigation'
 import NavIcon from './NavIcon.vue'
+
+withDefaults(
+  defineProps<{
+    /**
+     * glass — desktop frosted bar (content sits beside, not under)
+     * solid — mobile drawer (must fully cover page content underneath)
+     */
+    surface?: 'glass' | 'solid'
+  }>(),
+  { surface: 'glass' },
+)
 
 const emit = defineEmits<{
   navigate: []

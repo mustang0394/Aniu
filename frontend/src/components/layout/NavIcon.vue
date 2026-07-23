@@ -1,38 +1,60 @@
 <template>
+  <!--
+    24×24 Lucide-style strokes, optically centered in viewBox.
+    Always use display:block — inline SVG has a baseline gap that makes
+    icons look 1–2px low inside flex/grid badges.
+  -->
   <svg
-    class="size-[1.125rem] shrink-0"
+    class="block size-[18px] shrink-0"
     viewBox="0 0 24 24"
+    width="18"
+    height="18"
     fill="none"
     stroke="currentColor"
-    stroke-width="1.85"
+    stroke-width="1.75"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"
+    focusable="false"
   >
-    <template v-if="name === 'overview'">
-      <rect x="3" y="3" width="7" height="9" rx="1.5" />
-      <rect x="14" y="3" width="7" height="5" rx="1.5" />
-      <rect x="14" y="12" width="7" height="9" rx="1.5" />
-      <rect x="3" y="16" width="7" height="5" rx="1.5" />
-    </template>
-    <template v-else-if="name === 'tasks'">
+    <!-- overview: 2×2 dashboard tiles, symmetric in 24 box -->
+    <g v-if="name === 'overview'">
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+      <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+    </g>
+
+    <!-- tasks: clipboard, body centered -->
+    <g v-else-if="name === 'tasks'">
       <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
       <rect x="9" y="3" width="6" height="4" rx="1" />
-      <path d="M9 12h6M9 16h4" />
-    </template>
-    <template v-else-if="name === 'chat'">
-      <path d="M21 12a8.5 8.5 0 0 1-8.5 8.5H7l-4 2.5.8-3.8A8.5 8.5 0 1 1 21 12Z" />
-      <path d="M8.5 12h.01M12 12h.01M15.5 12h.01" />
-    </template>
-    <template v-else-if="name === 'schedule'">
-      <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
-      <path d="M3.5 10h17M8 3.5v3M16 3.5v3" />
-      <path d="M8.5 14h.01M12 14h.01M15.5 14h.01M8.5 17h.01M12 17h.01" />
-    </template>
-    <template v-else-if="name === 'settings'">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.86 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-    </template>
+      <path d="M9 12h6" />
+      <path d="M9 16h4" />
+    </g>
+
+    <!-- chat: rounded bubble, geometric center ≈ (12, 11.5) -->
+    <g v-else-if="name === 'chat'">
+      <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
+    </g>
+
+    <!-- schedule: calendar, hooks balanced -->
+    <g v-else-if="name === 'schedule'">
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18" />
+      <path d="M8 3v4" />
+      <path d="M16 3v4" />
+    </g>
+
+    <!-- settings: cog, center circle + even teeth -->
+    <g v-else-if="name === 'settings'">
+      <path
+        d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+      />
+      <path
+        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"
+      />
+    </g>
   </svg>
 </template>
 

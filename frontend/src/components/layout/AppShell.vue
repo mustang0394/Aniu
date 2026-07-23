@@ -5,28 +5,42 @@
       <AppSidebar @logout="handleLogout" />
     </div>
 
-    <!-- Mobile drawer -->
-    <div
-      v-if="mobileNavOpen"
-      class="fixed inset-0 z-50 lg:hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-label="导航菜单"
-    >
-      <div
-        class="absolute inset-0 glass-overlay"
-        @click="mobileNavOpen = false"
-      />
-      <div class="absolute inset-y-0 left-0 w-sidebar max-w-[85vw] shadow-lg">
-        <AppSidebar @navigate="mobileNavOpen = false" @logout="handleLogout" />
+    <!-- Mobile drawer: separate transitions so Vue can measure duration on each root -->
+    <Teleport to="body">
+      <div class="lg:hidden" aria-hidden="true">
+        <!-- Backdrop fade -->
+        <Transition name="mobile-backdrop">
+          <div
+            v-if="mobileNavOpen"
+            class="fixed inset-0 z-50 bg-black/40"
+            @click="closeMobileNav"
+          />
+        </Transition>
+
+        <!-- Panel slide — solid white so page content never bleeds through -->
+        <Transition name="mobile-panel">
+          <div
+            v-if="mobileNavOpen"
+            class="fixed inset-y-0 left-0 z-50 flex w-sidebar max-w-[85vw] flex-col bg-white shadow-[8px_0_32px_rgba(0,0,0,0.18)]"
+            role="dialog"
+            aria-modal="true"
+            aria-label="导航菜单"
+          >
+            <AppSidebar
+              surface="solid"
+              @navigate="closeMobileNav"
+              @logout="handleLogout"
+            />
+          </div>
+        </Transition>
       </div>
-    </div>
+    </Teleport>
 
     <!-- Main column -->
     <div class="flex min-h-dvh flex-col lg:pl-sidebar">
       <AppTopBar
         :title="pageTitle"
-        @open-menu="mobileNavOpen = true"
+        @open-menu="openMobileNav"
         @logout="handleLogout"
       />
 
@@ -70,15 +84,23 @@ const mobileNavOpen = ref(false)
 
 const pageTitle = computed(() => navTitleForPath(route.path))
 
+function openMobileNav() {
+  mobileNavOpen.value = true
+}
+
+function closeMobileNav() {
+  mobileNavOpen.value = false
+}
+
 watch(
   () => route.fullPath,
   () => {
-    mobileNavOpen.value = false
+    closeMobileNav()
   },
 )
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') mobileNavOpen.value = false
+  if (e.key === 'Escape') closeMobileNav()
 }
 
 watch(mobileNavOpen, (open) => {
@@ -95,7 +117,7 @@ onBeforeUnmount(() => {
 })
 
 function handleLogout() {
-  mobileNavOpen.value = false
+  closeMobileNav()
   clearStoredToken()
   clearStoredLoginFlag()
   clearStoredLoginNotice()
@@ -104,3 +126,37 @@ function handleLogout() {
   router.replace('/login')
 }
 </script>
+
+<style scoped>
+/* Backdrop: fade */
+.mobile-backdrop-enter-active,
+.mobile-backdrop-leave-active {
+  transition: opacity 0.28s ease;
+}
+
+.mobile-backdrop-enter-from,
+.mobile-backdrop-leave-to {
+  opacity: 0;
+}
+
+/* Panel: slide from left (iOS-like ease) */
+.mobile-panel-enter-active,
+.mobile-panel-leave-active {
+  transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+
+.mobile-panel-enter-from,
+.mobile-panel-leave-to {
+  transform: translateX(-100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-backdrop-enter-active,
+  .mobile-backdrop-leave-active,
+  .mobile-panel-enter-active,
+  .mobile-panel-leave-active {
+    transition-duration: 0.01ms;
+  }
+}
+</style>

@@ -10,7 +10,7 @@
       <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <!-- Left column -->
         <div class="flex flex-col gap-4">
-          <UiField label="系统名称" help="显示在侧边栏、聊天助手等位置的产品名称，默认 Aniu。">
+          <UiField label="系统名称" help="显示在侧边栏、浏览器标签页、聊天助手等位置的产品名称，默认 Aniu。">
             <input
               v-model="settings.app_display_name"
               maxlength="64"
@@ -84,18 +84,22 @@
           <UiField label="Bot Token" help="Telegram Bot 的 API Token，从 @BotFather 获取。">
             <input
               v-model="settings.tg_bot_token"
-              type="password"
+              type="text"
               placeholder="123456:ABC-DEF..."
               class="field-input"
+              autocomplete="off"
+              spellcheck="false"
             />
           </UiField>
 
           <UiField label="Chat ID" help="接收通知的 Telegram 聊天 ID，可通过 @userinfobot 查询。">
             <input
               v-model="settings.tg_chat_id"
-              type="password"
+              type="text"
               placeholder="-100xxxxxxxxxx"
               class="field-input"
+              autocomplete="off"
+              spellcheck="false"
             />
           </UiField>
 

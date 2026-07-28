@@ -32,6 +32,7 @@ class AppSettingsBase(BaseModel):
     llm_base_url: str | None = Field(default=None, max_length=512)
     llm_api_key: str | None = Field(default=None, max_length=512)
     llm_model: str = Field(default="gpt-4o-mini", max_length=128)
+    llm_reasoning_effort: str | None = Field(default=None, max_length=64)
     system_prompt: str = Field(max_length=20000)
     automation_session_id: int | None = None
     automation_context_window_tokens: int | None = Field(default=128000, ge=4096)
@@ -70,6 +71,14 @@ class AppSettingsBase(BaseModel):
         except (TypeError, ValueError):
             return 0.0
         return amount if amount > 0 else 0.0
+
+    @field_validator("llm_reasoning_effort", mode="before")
+    @classmethod
+    def _normalize_llm_reasoning_effort(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
 
 class AppSettingsRead(AppSettingsBase):
@@ -115,6 +124,7 @@ class AppSettingsRead(AppSettingsBase):
             "llm_base_url": getattr(data, "llm_base_url", None),
             "llm_api_key": getattr(data, "llm_api_key", None),
             "llm_model": getattr(data, "llm_model", "gpt-4o-mini"),
+            "llm_reasoning_effort": getattr(data, "llm_reasoning_effort", None),
             "system_prompt": getattr(data, "system_prompt", ""),
             "automation_session_id": getattr(data, "automation_session_id", None),
             "automation_context_window_tokens": getattr(

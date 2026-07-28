@@ -97,6 +97,10 @@ def _ensure_app_settings_columns(engine) -> None:
         statements.append(
             "ALTER TABLE app_settings ADD COLUMN llm_enable_reasoning_content_echo BOOLEAN DEFAULT 0"
         )
+    if "llm_reasoning_effort" not in columns:
+        statements.append(
+            "ALTER TABLE app_settings ADD COLUMN llm_reasoning_effort VARCHAR(64)"
+        )
     if "tg_bot_token" not in columns:
         statements.append("ALTER TABLE app_settings ADD COLUMN tg_bot_token VARCHAR(255)")
     if "tg_chat_id" not in columns:

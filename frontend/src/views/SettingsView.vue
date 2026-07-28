@@ -54,6 +54,20 @@
             </UiField>
           </div>
 
+          <UiField
+            label="思考等级"
+            help="对应请求参数 reasoning_effort。留空则不传该参数；可填 low / medium / high 等，视模型支持而定。"
+          >
+            <input
+              v-model="settings.llm_reasoning_effort"
+              type="text"
+              placeholder="例如 medium（可选）"
+              class="field-input"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </UiField>
+
           <div class="flex items-center justify-between gap-4 rounded-[12px] border border-separator bg-fill/40 px-3.5 py-3">
             <div class="min-w-0">
               <p class="m-0 text-footnote font-semibold text-label">回传思考内容</p>

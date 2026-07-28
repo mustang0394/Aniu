@@ -1482,6 +1482,7 @@ class AniuService:
             enable_reasoning_echo=getattr(
                 settings, "llm_enable_reasoning_content_echo", False
             ),
+            reasoning_effort=getattr(settings, "llm_reasoning_effort", None),
         )
 
         return {
@@ -1521,6 +1522,7 @@ class AniuService:
             llm_enable_reasoning_content_echo=getattr(
                 settings, "llm_enable_reasoning_content_echo", False
             ),
+            llm_reasoning_effort=getattr(settings, "llm_reasoning_effort", None),
         )
 
         event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
@@ -1548,6 +1550,9 @@ class AniuService:
                     cancel_event=cancel_event,
                     enable_reasoning_echo=getattr(
                         settings_snapshot, "llm_enable_reasoning_content_echo", False
+                    ),
+                    reasoning_effort=getattr(
+                        settings_snapshot, "llm_reasoning_effort", None
                     ),
                 )
                 _emit("completed", message=content)
@@ -1892,6 +1897,9 @@ class AniuService:
                 ),
                 "llm_enable_reasoning_content_echo": getattr(
                     settings, "llm_enable_reasoning_content_echo", False
+                ),
+                "llm_reasoning_effort": getattr(
+                    settings, "llm_reasoning_effort", None
                 ),
                 "tg_bot_token": getattr(settings, "tg_bot_token", None),
                 "tg_chat_id": getattr(settings, "tg_chat_id", None),

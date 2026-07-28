@@ -47,6 +47,13 @@ class LLMUpstreamError(RuntimeError):
         self.status_code = status_code
 
 
+def normalize_reasoning_effort(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
     if cancel_event is not None and cancel_event.is_set():
         raise LLMStreamCancelled("客户端连接已断开。")
@@ -241,6 +248,17 @@ class LLMService:
     def close(self) -> None:
         return None
 
+    @staticmethod
+    def _apply_reasoning_effort(
+        payload: dict[str, Any], effort: str | None
+    ) -> dict[str, Any]:
+        text = normalize_reasoning_effort(effort)
+        if text:
+            payload["reasoning_effort"] = text
+        else:
+            payload.pop("reasoning_effort", None)
+        return payload
+
     def chat(
         self,
         *,
@@ -254,6 +272,7 @@ class LLMService:
         emit: Any = None,
         cancel_event: threading.Event | None = None,
         enable_reasoning_echo: bool = False,
+        reasoning_effort: str | None = None,
     ) -> str:
         payload_messages: list[dict[str, Any]] = []
         chat_app_settings = (tool_context or {}).get("app_settings")
@@ -281,6 +300,11 @@ class LLMService:
                 context=chat_tool_context,
             )
 
+        chat_reasoning_effort = normalize_reasoning_effort(
+            reasoning_effort
+            if reasoning_effort is not None
+            else getattr(chat_app_settings, "llm_reasoning_effort", None)
+        )
         result = self._agent_loop(
             model=model,
             base_url=base_url,
@@ -292,6 +316,7 @@ class LLMService:
             emit=emit,
             cancel_event=cancel_event,
             enable_reasoning_echo=enable_reasoning_echo,
+            reasoning_effort=chat_reasoning_effort,
         )
         return result["final_answer"] or "模型本轮未返回可展示内容。"
 
@@ -302,7 +327,7 @@ class LLMService:
             run_type=run_type,
             app_settings=app_settings,
         )
-        return {
+        payload = {
             "model": app_settings.llm_model,
             "temperature": _LLM_TEMPERATURE,
             "messages": [
@@ -312,6 +337,9 @@ class LLMService:
             "tools": skill_registry.build_tools(run_type=run_type),
             "tool_choice": "auto",
         }
+        return self._apply_reasoning_effort(
+            payload, getattr(app_settings, "llm_reasoning_effort", None)
+        )
 
     def build_request_payload_from_messages(
         self,
@@ -329,13 +357,16 @@ class LLMService:
         if system_prompt:
             payload_messages.append({"role": "system", "content": system_prompt})
         payload_messages.extend(dict(message) for message in messages)
-        return {
+        payload = {
             "model": app_settings.llm_model,
             "temperature": _LLM_TEMPERATURE,
             "messages": payload_messages,
             "tools": skill_registry.build_tools(run_type=run_type),
             "tool_choice": "auto",
         }
+        return self._apply_reasoning_effort(
+            payload, getattr(app_settings, "llm_reasoning_effort", None)
+        )
 
     @staticmethod
     def _augment_system_prompt(
@@ -419,6 +450,7 @@ class LLMService:
             enable_reasoning_echo=getattr(
                 app_settings, "llm_enable_reasoning_content_echo", False
             ),
+            reasoning_effort=getattr(app_settings, "llm_reasoning_effort", None),
         )
 
         return (
@@ -447,21 +479,26 @@ class LLMService:
         emit: Any = None,
         cancel_event: threading.Event | None = None,
         enable_reasoning_echo: bool = False,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
         messages: list[dict[str, Any]] = [dict(m) for m in initial_messages]
         response_history: list[dict[str, Any]] = []
         tool_history: list[dict[str, Any]] = []
+        normalized_effort = normalize_reasoning_effort(reasoning_effort)
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
             _raise_if_cancelled(cancel_event)
-            iteration_payload = {
-                "model": model,
-                "temperature": _LLM_TEMPERATURE,
-                "messages": messages,
-                "tools": skill_registry.build_tools(run_type=run_type),
-                "tool_choice": "auto",
-            }
+            iteration_payload = self._apply_reasoning_effort(
+                {
+                    "model": model,
+                    "temperature": _LLM_TEMPERATURE,
+                    "messages": messages,
+                    "tools": skill_registry.build_tools(run_type=run_type),
+                    "tool_choice": "auto",
+                },
+                normalized_effort,
+            )
             _emit("llm_request", iteration=iteration + 1, model=model)
             response_payload = self._call_llm_stream(
                 base_url=base_url,

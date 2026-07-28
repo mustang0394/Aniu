@@ -718,6 +718,7 @@ class ChatSessionService:
                 llm_enable_reasoning_content_echo=getattr(
                     settings, "llm_enable_reasoning_content_echo", False
                 ),
+                llm_reasoning_effort=getattr(settings, "llm_reasoning_effort", None),
             )
             session_id = session.id
 
@@ -745,6 +746,9 @@ class ChatSessionService:
                     cancel_event=cancel_event,
                     enable_reasoning_echo=getattr(
                         settings_snapshot, "llm_enable_reasoning_content_echo", False
+                    ),
+                    reasoning_effort=getattr(
+                        settings_snapshot, "llm_reasoning_effort", None
                     ),
                 )
                 _emit("completed", message=content)

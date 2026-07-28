@@ -26,6 +26,9 @@ class AppSettings(Base):
     llm_base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     llm_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     llm_model: Mapped[str] = mapped_column(String(128), default="gpt-4o-mini")
+    llm_reasoning_effort: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, default=None
+    )
     disabled_skill_ids_json: Mapped[str] = mapped_column(
         Text,
         default="[]",

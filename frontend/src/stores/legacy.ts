@@ -38,6 +38,7 @@ const defaultSettings = (): SettingsPayload => ({
   llm_base_url: '',
   llm_api_key: '',
   llm_model: 'gpt-4o-mini',
+  llm_reasoning_effort: '',
   automation_context_window_tokens: 128000,
   llm_enable_reasoning_content_echo: false,
   tg_bot_token: '',
@@ -224,6 +225,7 @@ export const useAppStore = defineStore('app', () => {
     settings.llm_base_url = payload.llm_base_url ?? ''
     settings.llm_api_key = payload.llm_api_key ?? ''
     settings.llm_model = payload.llm_model
+    settings.llm_reasoning_effort = payload.llm_reasoning_effort ?? ''
     settings.automation_context_window_tokens = payload.automation_context_window_tokens ?? 128000
     settings.llm_enable_reasoning_content_echo = payload.llm_enable_reasoning_content_echo ?? false
     settings.tg_bot_token = payload.tg_bot_token ?? ''
@@ -356,6 +358,7 @@ export const useAppStore = defineStore('app', () => {
         mx_api_key: settings.mx_api_key || null,
         llm_base_url: settings.llm_base_url || null,
         llm_api_key: settings.llm_api_key || null,
+        llm_reasoning_effort: settings.llm_reasoning_effort?.trim() || null,
         tg_bot_token: settings.tg_bot_token || null,
         tg_chat_id: settings.tg_chat_id || null,
       })

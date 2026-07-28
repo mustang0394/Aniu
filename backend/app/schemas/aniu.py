@@ -33,6 +33,7 @@ class AppSettingsBase(BaseModel):
     llm_api_key: str | None = Field(default=None, max_length=512)
     llm_model: str = Field(default="gpt-4o-mini", max_length=128)
     llm_reasoning_effort: str | None = Field(default=None, max_length=64)
+    llm_max_retries: int = Field(default=3, ge=0, le=10)
     system_prompt: str = Field(max_length=20000)
     automation_session_id: int | None = None
     automation_context_window_tokens: int | None = Field(default=128000, ge=4096)
@@ -80,6 +81,17 @@ class AppSettingsBase(BaseModel):
         text = str(value).strip()
         return text or None
 
+    @field_validator("llm_max_retries", mode="before")
+    @classmethod
+    def _normalize_llm_max_retries(cls, value: Any) -> int:
+        if value is None:
+            return 3
+        try:
+            retries = int(value)
+        except (TypeError, ValueError):
+            return 3
+        return max(0, min(10, retries))
+
 
 class AppSettingsRead(AppSettingsBase):
     model_config = ConfigDict(from_attributes=True)
@@ -125,6 +137,7 @@ class AppSettingsRead(AppSettingsBase):
             "llm_api_key": getattr(data, "llm_api_key", None),
             "llm_model": getattr(data, "llm_model", "gpt-4o-mini"),
             "llm_reasoning_effort": getattr(data, "llm_reasoning_effort", None),
+            "llm_max_retries": getattr(data, "llm_max_retries", 3),
             "system_prompt": getattr(data, "system_prompt", ""),
             "automation_session_id": getattr(data, "automation_session_id", None),
             "automation_context_window_tokens": getattr(

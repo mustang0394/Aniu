@@ -262,6 +262,16 @@ function createRunStream() {
         state.status = 'running'
         state.stageMessage = STAGE_MSG_ANALYZING
         break
+      case 'llm_retry': {
+        state.stage = 'llm'
+        state.status = 'running'
+        state.finalAnswer = ''
+        state.finalStarted = false
+        state.finalStreaming = false
+        const retryMessage = String(event.message || '').trim()
+        state.stageMessage = retryMessage || '大模型请求失败，正在重试…'
+        break
+      }
       case 'tool_call':
         applyToolCallEvent(event)
         break

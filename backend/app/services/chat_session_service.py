@@ -719,6 +719,7 @@ class ChatSessionService:
                     settings, "llm_enable_reasoning_content_echo", False
                 ),
                 llm_reasoning_effort=getattr(settings, "llm_reasoning_effort", None),
+                llm_max_retries=getattr(settings, "llm_max_retries", 3),
             )
             session_id = session.id
 

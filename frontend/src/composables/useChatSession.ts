@@ -121,6 +121,11 @@ export function useChatSession() {
         }
         break
       }
+      case 'llm_retry': {
+        const retryMessage = String(event.message || '').trim()
+        assistant.content = retryMessage || '大模型请求失败，正在重试…'
+        break
+      }
       case 'final_started': {
         assistant.content = ''
         break

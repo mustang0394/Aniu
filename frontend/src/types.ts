@@ -9,6 +9,7 @@ export interface AppSettings {
   llm_api_key: string | null
   llm_model: string
   llm_reasoning_effort: string | null
+  llm_max_retries: number
   automation_context_window_tokens: number | null
   llm_enable_reasoning_content_echo: boolean
   tg_bot_token: string | null

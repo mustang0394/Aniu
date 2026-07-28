@@ -54,7 +54,7 @@
               </UiField>
             </div>
 
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <UiField label="模型名" help="例如 gpt-4o-mini、o3-mini。">
                 <input v-model="settings.llm_model" class="field-input" />
               </UiField>
@@ -80,6 +80,19 @@
                   type="number"
                   min="4096"
                   step="1024"
+                  class="field-input"
+                />
+              </UiField>
+              <UiField
+                label="请求重试次数"
+                help="单次大模型调用失败后的额外重试次数，默认 3；设为 0 关闭。适用于超时、限流与 5xx。"
+              >
+                <input
+                  v-model.number="settings.llm_max_retries"
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="1"
                   class="field-input"
                 />
               </UiField>

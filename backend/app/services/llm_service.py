@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
+import random
 import threading
+import time
 from typing import Any, Callable, Iterable
 
 import httpx
@@ -15,9 +18,16 @@ from skills.mx_core.markets import (
 )
 from app.skills import skill_registry
 
+logger = logging.getLogger(__name__)
+
 _LLM_TEMPERATURE = 0.2
 _MAX_TOOL_ITERATIONS = 100
 _FINAL_STREAM_CHUNK_SIZE = 96
+_DEFAULT_LLM_MAX_RETRIES = 3
+_LLM_RETRY_BASE_SECONDS = 1.0
+_LLM_RETRY_MAX_SECONDS = 20.0
+_LLM_RETRY_CANCEL_POLL_SECONDS = 0.2
+_RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _CHAT_CONFIRMATION_APPEND_PROMPT = (
     "聊天专用安全规则：当操作涉及交易执行、下单、撤单、自选股增删、写入、删除、覆盖、"
     "批量修改或其他会改变数据、文件、配置、状态的破坏性操作时，你必须先明确说明拟执行操作、"
@@ -57,6 +67,76 @@ def normalize_reasoning_effort(value: Any) -> str | None:
 def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
     if cancel_event is not None and cancel_event.is_set():
         raise LLMStreamCancelled("客户端连接已断开。")
+
+
+def normalize_max_retries(value: Any) -> int:
+    """Normalize configured extra retry count to 0..10 (default 3)."""
+    if value is None:
+        return _DEFAULT_LLM_MAX_RETRIES
+    try:
+        retries = int(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_LLM_MAX_RETRIES
+    return max(0, min(10, retries))
+
+
+def _is_retryable_llm_error(exc: BaseException) -> bool:
+    if isinstance(exc, LLMStreamCancelled):
+        return False
+    if isinstance(exc, LLMUpstreamError):
+        status = exc.status_code
+        if status is None:
+            # Stream body error / mid-stream failure without HTTP status.
+            return True
+        return int(status) in _RETRYABLE_HTTP_STATUS_CODES
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.HTTPError):
+        return True
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        if message.startswith("大模型接口请求超时") or message.startswith(
+            "大模型接口请求失败"
+        ):
+            return True
+    return False
+
+
+def _retry_delay_seconds(attempt_index: int) -> float:
+    """Exponential backoff for retry attempt_index (0-based), capped at 20s."""
+    raw = _LLM_RETRY_BASE_SECONDS * (2 ** max(0, int(attempt_index)))
+    jittered = raw * (0.8 + 0.4 * random.random())
+    return min(_LLM_RETRY_MAX_SECONDS, jittered)
+
+
+def _sleep_with_cancel(
+    delay_seconds: float,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    remaining = max(0.0, float(delay_seconds))
+    while remaining > 0:
+        _raise_if_cancelled(cancel_event)
+        slice_seconds = min(_LLM_RETRY_CANCEL_POLL_SECONDS, remaining)
+        time.sleep(slice_seconds)
+        remaining -= slice_seconds
+    _raise_if_cancelled(cancel_event)
+
+
+def _annotate_retry_exhaustion(exc: BaseException, retries_attempted: int) -> BaseException:
+    if retries_attempted <= 0:
+        return exc
+    suffix = f"，已重试 {retries_attempted} 次仍失败。"
+    message = str(exc or "").rstrip()
+    if "已重试" in message:
+        return exc
+    if message.endswith("。"):
+        message = message[:-1]
+    annotated = f"{message}{suffix}"
+    if isinstance(exc, LLMUpstreamError):
+        return LLMUpstreamError(annotated, status_code=exc.status_code)
+    if isinstance(exc, RuntimeError) and not isinstance(exc, LLMStreamCancelled):
+        return RuntimeError(annotated)
+    return exc
 
 
 def _format_error_message(prefix: str, detail: str) -> str:
@@ -317,6 +397,9 @@ class LLMService:
             cancel_event=cancel_event,
             enable_reasoning_echo=enable_reasoning_echo,
             reasoning_effort=chat_reasoning_effort,
+            max_retries=normalize_max_retries(
+                getattr(chat_app_settings, "llm_max_retries", _DEFAULT_LLM_MAX_RETRIES)
+            ),
         )
         return result["final_answer"] or "模型本轮未返回可展示内容。"
 
@@ -451,6 +534,9 @@ class LLMService:
                 app_settings, "llm_enable_reasoning_content_echo", False
             ),
             reasoning_effort=getattr(app_settings, "llm_reasoning_effort", None),
+            max_retries=normalize_max_retries(
+                getattr(app_settings, "llm_max_retries", _DEFAULT_LLM_MAX_RETRIES)
+            ),
         )
 
         return (
@@ -480,12 +566,14 @@ class LLMService:
         cancel_event: threading.Event | None = None,
         enable_reasoning_echo: bool = False,
         reasoning_effort: str | None = None,
+        max_retries: int | None = None,
     ) -> dict[str, Any]:
         _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
         messages: list[dict[str, Any]] = [dict(m) for m in initial_messages]
         response_history: list[dict[str, Any]] = []
         tool_history: list[dict[str, Any]] = []
         normalized_effort = normalize_reasoning_effort(reasoning_effort)
+        normalized_max_retries = normalize_max_retries(max_retries)
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
             _raise_if_cancelled(cancel_event)
@@ -507,6 +595,7 @@ class LLMService:
                 timeout_seconds=timeout_seconds,
                 emit=_emit,
                 cancel_event=cancel_event,
+                max_retries=normalized_max_retries,
             )
             response_history.append(response_payload)
 
@@ -620,7 +709,73 @@ class LLMService:
         timeout_seconds: int,
         emit: Callable[..., Any] | None = None,
         cancel_event: threading.Event | None = None,
+        max_retries: int | None = None,
     ) -> dict[str, Any]:
+        """Call the LLM stream endpoint with configurable transient retries.
+
+        ``max_retries`` is the number of *extra* attempts after the first failure
+        (default 3 → up to 4 logical HTTP tries). The include_usage 400 fallback
+        remains an inner compatibility retry and does not consume this quota.
+        """
+        _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
+        retries = normalize_max_retries(max_retries)
+        last_error: BaseException | None = None
+
+        for attempt in range(retries + 1):
+            _raise_if_cancelled(cancel_event)
+            try:
+                return self._call_llm_stream_once(
+                    base_url=base_url,
+                    api_key=api_key,
+                    payload=payload,
+                    timeout_seconds=timeout_seconds,
+                    emit=_emit,
+                    cancel_event=cancel_event,
+                )
+            except LLMStreamCancelled:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if not _is_retryable_llm_error(exc) or attempt >= retries:
+                    raise _annotate_retry_exhaustion(exc, attempt) from exc
+
+                delay = _retry_delay_seconds(attempt)
+                error_text = str(exc)
+                logger.warning(
+                    "LLM stream attempt %s/%s failed (%s); retrying in %.2fs",
+                    attempt + 1,
+                    retries + 1,
+                    error_text,
+                    delay,
+                )
+                _emit(
+                    "llm_retry",
+                    attempt=attempt + 1,
+                    max_retries=retries,
+                    delay_seconds=round(delay, 3),
+                    message=(
+                        f"大模型请求失败，{delay:.1f} 秒后重试 "
+                        f"({attempt + 1}/{retries})…"
+                    ),
+                    error=error_text,
+                )
+                _sleep_with_cancel(delay, cancel_event)
+
+        if last_error is not None:
+            raise _annotate_retry_exhaustion(last_error, retries)
+        raise RuntimeError("大模型流式请求失败。")
+
+    def _call_llm_stream_once(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        payload: dict[str, Any],
+        timeout_seconds: int,
+        emit: Callable[..., Any] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """Single logical stream attempt, including include_usage 400 fallback."""
         stream_payload = dict(payload)
         stream_payload["stream"] = True
 
@@ -864,6 +1019,52 @@ class LLMService:
         api_key: str,
         payload: dict[str, Any],
         timeout_seconds: int,
+        max_retries: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """Non-streaming LLM call with the same transient retry policy as streaming.
+
+        Kept for parity; primary runtime path uses ``_call_llm_stream``.
+        """
+        retries = normalize_max_retries(max_retries)
+        last_error: BaseException | None = None
+
+        for attempt in range(retries + 1):
+            _raise_if_cancelled(cancel_event)
+            try:
+                return self._call_llm_once(
+                    base_url=base_url,
+                    api_key=api_key,
+                    payload=payload,
+                    timeout_seconds=timeout_seconds,
+                )
+            except LLMStreamCancelled:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if not _is_retryable_llm_error(exc) or attempt >= retries:
+                    raise _annotate_retry_exhaustion(exc, attempt) from exc
+                delay = _retry_delay_seconds(attempt)
+                logger.warning(
+                    "LLM request attempt %s/%s failed (%s); retrying in %.2fs",
+                    attempt + 1,
+                    retries + 1,
+                    exc,
+                    delay,
+                )
+                _sleep_with_cancel(delay, cancel_event)
+
+        if last_error is not None:
+            raise _annotate_retry_exhaustion(last_error, retries)
+        raise RuntimeError("大模型请求失败。")
+
+    def _call_llm_once(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        payload: dict[str, Any],
+        timeout_seconds: int,
     ) -> dict[str, Any]:
         url = base_url.rstrip("/")
         if not url.endswith("/chat/completions"):
@@ -875,31 +1076,17 @@ class LLMService:
         try:
             with self._create_http_client(timeout_seconds) as http_client:
                 response = http_client.post(url, headers=headers, json=payload)
+                if response.is_error:
+                    _raise_upstream_http_error(response, response.content)
                 response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            if status == 401:
-                raise RuntimeError("大模型 API Key 无效或已过期 (401)。") from exc
-            if status == 400:
-                detail = ""
-                try:
-                    detail = exc.response.json().get("error", {}).get("message", "")
-                except Exception:
-                    pass
-                raise RuntimeError(
-                    f"大模型请求参数错误 (400): {detail or exc.response.text[:200]}"
-                ) from exc
-            if status == 429:
-                raise RuntimeError(
-                    "大模型接口请求频率超限 (429)，请稍后重试。"
-                ) from exc
-            raise RuntimeError(
-                f"大模型接口返回错误 ({status}): {exc.response.text[:200]}"
-            ) from exc
+        except LLMUpstreamError:
+            raise
         except httpx.TimeoutException as exc:
             raise RuntimeError(
                 f"大模型接口请求超时 ({timeout_seconds}s)，请检查网络或增加超时时间。"
             ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"大模型接口请求失败: {exc}") from exc
         return response.json()
 
 

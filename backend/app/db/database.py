@@ -101,6 +101,10 @@ def _ensure_app_settings_columns(engine) -> None:
         statements.append(
             "ALTER TABLE app_settings ADD COLUMN llm_reasoning_effort VARCHAR(64)"
         )
+    if "llm_max_retries" not in columns:
+        statements.append(
+            "ALTER TABLE app_settings ADD COLUMN llm_max_retries INTEGER DEFAULT 3"
+        )
     if "tg_bot_token" not in columns:
         statements.append("ALTER TABLE app_settings ADD COLUMN tg_bot_token VARCHAR(255)")
     if "tg_chat_id" not in columns:
@@ -152,7 +156,8 @@ def _ensure_app_settings_columns(engine) -> None:
                 "app_display_name = COALESCE("
                 "NULLIF(trim(app_display_name), ''), "
                 "'Aniu'"
-                ")"
+                "), "
+                "llm_max_retries = COALESCE(llm_max_retries, 3)"
             )
         )
 

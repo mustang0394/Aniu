@@ -1523,6 +1523,7 @@ class AniuService:
                 settings, "llm_enable_reasoning_content_echo", False
             ),
             llm_reasoning_effort=getattr(settings, "llm_reasoning_effort", None),
+            llm_max_retries=getattr(settings, "llm_max_retries", 3),
         )
 
         event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
@@ -1901,6 +1902,7 @@ class AniuService:
                 "llm_reasoning_effort": getattr(
                     settings, "llm_reasoning_effort", None
                 ),
+                "llm_max_retries": getattr(settings, "llm_max_retries", 3),
                 "tg_bot_token": getattr(settings, "tg_bot_token", None),
                 "tg_chat_id": getattr(settings, "tg_chat_id", None),
                 "tg_notify_trade_enabled": getattr(

@@ -39,6 +39,7 @@ const defaultSettings = (): SettingsPayload => ({
   llm_api_key: '',
   llm_model: 'gpt-4o-mini',
   llm_reasoning_effort: '',
+  llm_max_retries: 3,
   automation_context_window_tokens: 128000,
   llm_enable_reasoning_content_echo: false,
   tg_bot_token: '',
@@ -226,6 +227,9 @@ export const useAppStore = defineStore('app', () => {
     settings.llm_api_key = payload.llm_api_key ?? ''
     settings.llm_model = payload.llm_model
     settings.llm_reasoning_effort = payload.llm_reasoning_effort ?? ''
+    settings.llm_max_retries = Number.isFinite(Number(payload.llm_max_retries))
+      ? Math.max(0, Math.min(10, Math.trunc(Number(payload.llm_max_retries))))
+      : 3
     settings.automation_context_window_tokens = payload.automation_context_window_tokens ?? 128000
     settings.llm_enable_reasoning_content_echo = payload.llm_enable_reasoning_content_echo ?? false
     settings.tg_bot_token = payload.tg_bot_token ?? ''

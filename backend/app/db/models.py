@@ -29,6 +29,7 @@ class AppSettings(Base):
     llm_reasoning_effort: Mapped[str | None] = mapped_column(
         String(64), nullable=True, default=None
     )
+    llm_max_retries: Mapped[int] = mapped_column(Integer, default=3)
     disabled_skill_ids_json: Mapped[str] = mapped_column(
         Text,
         default="[]",

@@ -7,172 +7,228 @@
     />
 
     <UiPanel title="核心配置" kicker="Settings">
-      <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <!-- Left column -->
-        <div class="flex flex-col gap-4">
-          <UiField label="系统名称" help="显示在侧边栏、浏览器标签页、聊天助手等位置的产品名称，默认 Aniu。">
-            <input
-              v-model="settings.app_display_name"
-              maxlength="64"
-              placeholder="Aniu"
-              class="field-input"
-            />
-          </UiField>
-
-          <UiField label="Base URL" help="大模型 API 的基础地址，默认可填写 OpenAI 兼容地址。">
-            <input
-              v-model="settings.llm_base_url"
-              placeholder="https://api.openai.com/v1"
-              class="field-input"
-            />
-          </UiField>
-
-          <UiField label="API Key" help="用于访问大模型 API 的密钥。">
-            <input
-              v-model="settings.llm_api_key"
-              type="password"
-              placeholder="sk-..."
-              class="field-input"
-            />
-          </UiField>
-
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <UiField label="模型名" help="要使用的大模型名称，例如 gpt-4o-mini。">
-              <input v-model="settings.llm_model" class="field-input" />
-            </UiField>
-            <UiField
-              label="最大上下文"
-              help="默认 128K。后端会按该值的 85% 作为自动化会话上下文压缩触发预算。"
-            >
+      <div class="space-y-8">
+        <!-- 基本信息 -->
+        <section class="settings-section">
+          <header class="settings-section__header">
+            <h3 class="settings-section__title">基本信息</h3>
+            <p class="settings-section__desc">产品展示名称等通用配置</p>
+          </header>
+          <div class="max-w-xl">
+            <UiField label="系统名称" help="显示在侧边栏、浏览器标签页、聊天助手等位置的产品名称，默认 Aniu。">
               <input
-                v-model.number="settings.automation_context_window_tokens"
-                type="number"
-                min="4096"
-                step="1024"
+                v-model="settings.app_display_name"
+                maxlength="64"
+                placeholder="Aniu"
                 class="field-input"
               />
             </UiField>
           </div>
+        </section>
 
-          <UiField
-            label="思考等级"
-            help="对应请求参数 reasoning_effort。留空则不传该参数；可填 low / medium / high 等，视模型支持而定。"
-          >
-            <input
-              v-model="settings.llm_reasoning_effort"
-              type="text"
-              placeholder="例如 medium（可选）"
-              class="field-input"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </UiField>
-
-          <div class="flex items-center justify-between gap-4 rounded-[12px] border border-separator bg-fill/40 px-3.5 py-3">
-            <div class="min-w-0">
-              <p class="m-0 text-footnote font-semibold text-label">回传思考内容</p>
-              <p class="m-0 mt-0.5 text-caption text-label-tertiary">
-                启用后，推理模型返回的 thinking 内容会在下次请求时回传，避免部分模型报 400。
-              </p>
+        <!-- 大模型 -->
+        <section class="settings-section">
+          <header class="settings-section__header">
+            <h3 class="settings-section__title">大模型</h3>
+            <p class="settings-section__desc">OpenAI 兼容接口、模型参数与推理相关选项</p>
+          </header>
+          <div class="space-y-4">
+            <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <UiField label="Base URL" help="大模型 API 的基础地址，默认可填写 OpenAI 兼容地址。">
+                <input
+                  v-model="settings.llm_base_url"
+                  placeholder="https://api.openai.com/v1"
+                  class="field-input"
+                />
+              </UiField>
+              <UiField label="API Key" help="用于访问大模型 API 的密钥。">
+                <input
+                  v-model="settings.llm_api_key"
+                  type="password"
+                  placeholder="sk-..."
+                  class="field-input"
+                />
+              </UiField>
             </div>
-            <UiToggle v-model="settings.llm_enable_reasoning_content_echo" />
-          </div>
 
-          <UiField label="妙想密钥" help="用于访问东方财富妙想接口的密钥。">
-            <input
-              v-model="settings.mx_api_key"
-              type="password"
-              placeholder="妙想接口 apikey"
-              class="field-input"
-            />
-          </UiField>
-
-          <div class="flex items-center justify-between gap-4 rounded-[12px] border border-separator bg-fill/40 px-3.5 py-3">
-            <div class="min-w-0">
-              <p class="m-0 text-footnote font-semibold text-label">交易通知 (Telegram)</p>
-              <p class="m-0 mt-0.5 text-caption text-label-tertiary">启用后，交易执行时将向 Telegram 推送通知。</p>
-            </div>
-            <UiToggle v-model="settings.tg_notify_trade_enabled" />
-          </div>
-
-          <UiField label="Bot Token" help="Telegram Bot 的 API Token，从 @BotFather 获取。">
-            <input
-              v-model="settings.tg_bot_token"
-              type="text"
-              placeholder="123456:ABC-DEF..."
-              class="field-input"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </UiField>
-
-          <UiField label="Chat ID" help="接收通知的 Telegram 聊天 ID，可通过 @userinfobot 查询。">
-            <input
-              v-model="settings.tg_chat_id"
-              type="text"
-              placeholder="-100xxxxxxxxxx"
-              class="field-input"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </UiField>
-
-          <div>
-            <p class="mb-2 text-footnote font-semibold text-label">选股范围</p>
-            <div class="grid grid-cols-2 gap-2 sm:grid-cols-3" role="group" aria-label="选股范围">
-              <label
-                v-for="option in marketOptions"
-                :key="option.key"
-                class="flex cursor-pointer items-center gap-2 rounded-[12px] border border-separator bg-fill/30 px-3 py-2.5 text-footnote font-medium text-label transition-colors hover:bg-hover has-[:checked]:border-accent/30 has-[:checked]:bg-accent-soft"
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <UiField label="模型名" help="要使用的大模型名称，例如 gpt-4o-mini。">
+                <input v-model="settings.llm_model" class="field-input" />
+              </UiField>
+              <UiField
+                label="思考等级"
+                help="对应请求参数 reasoning_effort。留空则不传；可填 low / medium / high 等。"
               >
                 <input
-                  type="checkbox"
-                  class="size-4"
-                  :checked="settings.allowed_markets.includes(option.key)"
-                  :disabled="busy"
-                  @change="toggleMarket(option.key, ($event.target as HTMLInputElement).checked)"
+                  v-model="settings.llm_reasoning_effort"
+                  type="text"
+                  placeholder="例如 medium（可选）"
+                  class="field-input"
+                  autocomplete="off"
+                  spellcheck="false"
                 />
-                <span>{{ option.label }}</span>
-              </label>
+              </UiField>
+              <UiField
+                label="最大上下文"
+                help="默认 128K。后端会按该值的 85% 作为自动化会话上下文压缩触发预算。"
+              >
+                <input
+                  v-model.number="settings.automation_context_window_tokens"
+                  type="number"
+                  min="4096"
+                  step="1024"
+                  class="field-input"
+                />
+              </UiField>
             </div>
-            <p class="mt-2 mb-0 text-caption text-label-tertiary">
-              勾选允许选股与买入的市场。买入会按代码硬拦截；卖出/撤单不受限制。默认仅上证/深证 A 股。
-            </p>
-          </div>
 
-          <div class="flex items-center justify-between gap-4 rounded-[12px] border border-separator bg-fill/40 px-3.5 py-3">
-            <div class="min-w-0">
-              <p class="m-0 text-footnote font-semibold text-label">资金封印</p>
+            <div class="settings-toggle-card">
+              <div class="min-w-0">
+                <p class="m-0 text-footnote font-semibold text-label">回传思考内容</p>
+                <p class="m-0 mt-0.5 text-caption text-label-tertiary">
+                  启用后，推理模型返回的 thinking 内容会在下次请求时回传，避免部分模型报 400。
+                </p>
+              </div>
+              <UiToggle v-model="settings.llm_enable_reasoning_content_echo" />
             </div>
-            <UiToggle v-model="settings.capital_seal_enabled" :disabled="busy" />
           </div>
+        </section>
 
-          <UiField
-            label="封印金额（元）"
-            help="从模拟户中划出不可用于策略的资金。工具返回的总资产/可用资金/仓位与收益统计均按「真实值 − 封印」投影；持仓明细不减。"
-          >
-            <input
-              v-model.number="settings.capital_seal_amount"
-              type="number"
-              min="0"
-              step="1000"
-              placeholder="例如 900000"
-              class="field-input"
-              :disabled="busy || !settings.capital_seal_enabled"
-            />
-          </UiField>
-        </div>
+        <!-- 妙想接口 -->
+        <section class="settings-section">
+          <header class="settings-section__header">
+            <h3 class="settings-section__title">妙想接口</h3>
+            <p class="settings-section__desc">东方财富妙想 OpenAPI，用于行情、资讯与模拟交易</p>
+          </header>
+          <div class="max-w-xl">
+            <UiField label="妙想密钥" help="用于访问东方财富妙想接口的密钥。">
+              <input
+                v-model="settings.mx_api_key"
+                type="password"
+                placeholder="妙想接口 apikey"
+                class="field-input"
+              />
+            </UiField>
+          </div>
+        </section>
 
-        <!-- Right column -->
-        <div>
-          <UiField label="系统提示词" help="指导大模型行为的系统提示词，会影响 AI 的分析和决策方式。">
+        <!-- Telegram -->
+        <section class="settings-section">
+          <header class="settings-section__header">
+            <h3 class="settings-section__title">交易通知</h3>
+            <p class="settings-section__desc">通过 Telegram 推送交易执行结果</p>
+          </header>
+          <div class="space-y-4">
+            <div class="settings-toggle-card">
+              <div class="min-w-0">
+                <p class="m-0 text-footnote font-semibold text-label">启用 Telegram 通知</p>
+                <p class="m-0 mt-0.5 text-caption text-label-tertiary">
+                  开启后，交易执行时将向指定聊天推送通知。
+                </p>
+              </div>
+              <UiToggle v-model="settings.tg_notify_trade_enabled" />
+            </div>
+
+            <div
+              class="grid grid-cols-1 gap-4 lg:grid-cols-2"
+              :class="settings.tg_notify_trade_enabled ? '' : 'opacity-60'"
+            >
+              <UiField label="Bot Token" help="Telegram Bot 的 API Token，从 @BotFather 获取。">
+                <input
+                  v-model="settings.tg_bot_token"
+                  type="text"
+                  placeholder="123456:ABC-DEF..."
+                  class="field-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </UiField>
+              <UiField label="Chat ID" help="接收通知的 Telegram 聊天 ID，可通过 @userinfobot 查询。">
+                <input
+                  v-model="settings.tg_chat_id"
+                  type="text"
+                  placeholder="-100xxxxxxxxxx"
+                  class="field-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </UiField>
+            </div>
+          </div>
+        </section>
+
+        <!-- 交易约束 -->
+        <section class="settings-section">
+          <header class="settings-section__header">
+            <h3 class="settings-section__title">交易约束</h3>
+            <p class="settings-section__desc">选股市场范围与模拟资金封印</p>
+          </header>
+          <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
+            <div>
+              <p class="mb-2 text-footnote font-semibold text-label">选股范围</p>
+              <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3" role="group" aria-label="选股范围">
+                <label
+                  v-for="option in marketOptions"
+                  :key="option.key"
+                  class="flex cursor-pointer items-center gap-2 rounded-[12px] border border-separator bg-fill/30 px-3 py-2.5 text-footnote font-medium text-label transition-colors hover:bg-hover has-[:checked]:border-accent/30 has-[:checked]:bg-accent-soft"
+                >
+                  <input
+                    type="checkbox"
+                    class="size-4"
+                    :checked="settings.allowed_markets.includes(option.key)"
+                    :disabled="busy"
+                    @change="toggleMarket(option.key, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ option.label }}</span>
+                </label>
+              </div>
+              <p class="mt-2 mb-0 text-caption text-label-tertiary">
+                勾选允许选股与买入的市场。买入会按代码硬拦截；卖出/撤单不受限制。默认仅上证/深证 A 股。
+              </p>
+            </div>
+
+            <div class="space-y-3 rounded-[14px] border border-separator bg-fill/30 p-4">
+              <div class="flex items-center justify-between gap-4">
+                <div class="min-w-0">
+                  <p class="m-0 text-footnote font-semibold text-label">资金封印</p>
+                  <p class="m-0 mt-0.5 text-caption text-label-tertiary">
+                    从模拟户中划出不可用于策略的资金。
+                  </p>
+                </div>
+                <UiToggle v-model="settings.capital_seal_enabled" :disabled="busy" />
+              </div>
+              <UiField
+                label="封印金额（元）"
+                help="工具返回的总资产/可用资金/仓位与收益统计按「真实值 − 封印」投影；持仓明细不减。"
+              >
+                <input
+                  v-model.number="settings.capital_seal_amount"
+                  type="number"
+                  min="0"
+                  step="1000"
+                  placeholder="例如 900000"
+                  class="field-input"
+                  :disabled="busy || !settings.capital_seal_enabled"
+                />
+              </UiField>
+            </div>
+          </div>
+        </section>
+
+        <!-- 系统提示词 -->
+        <section class="settings-section settings-section--last">
+          <header class="settings-section__header">
+            <h3 class="settings-section__title">系统提示词</h3>
+            <p class="settings-section__desc">指导大模型行为，影响分析与决策风格</p>
+          </header>
+          <UiField help="建议写清角色、目标、风控偏好与输出要求。">
             <textarea
               v-model="settings.system_prompt"
-              rows="18"
-              class="field-input min-h-[280px] py-3"
+              rows="14"
+              class="field-input min-h-[220px] py-3 font-mono text-[13px] leading-relaxed sm:min-h-[280px]"
             />
           </UiField>
-        </div>
+        </section>
       </div>
 
       <div
@@ -435,6 +491,30 @@ onMounted(async () => {
 
 <style scoped>
 @reference "../styles/tailwind.css";
+
+.settings-section {
+  @apply border-b border-separator pb-8;
+}
+
+.settings-section--last {
+  @apply border-b-0 pb-0;
+}
+
+.settings-section__header {
+  @apply mb-4;
+}
+
+.settings-section__title {
+  @apply m-0 text-title-3 font-semibold text-label;
+}
+
+.settings-section__desc {
+  @apply m-0 mt-1 text-footnote text-label-secondary;
+}
+
+.settings-toggle-card {
+  @apply flex items-center justify-between gap-4 rounded-[12px] border border-separator bg-fill/40 px-3.5 py-3;
+}
 
 .field-input {
   @apply h-11 w-full rounded-[12px] border border-separator-strong bg-fill px-3.5 text-body text-label outline-none transition-colors;

@@ -20,9 +20,9 @@ export const appNavigation: AppNavItem[] = [
   { id: 'settings', name: '功能设置', path: '/settings', icon: 'settings' },
 ]
 
-export function navTitleForPath(path: string): string {
+export function navTitleForPath(path: string): string | null {
   const item = appNavigation.find(
     (nav) => path === nav.path || path.startsWith(nav.path + '/'),
   )
-  return item?.name ?? 'Aniu'
+  return item?.name ?? null
 }

@@ -32,6 +32,7 @@ type SettingsPayload = Omit<AppSettings, 'id' | 'created_at' | 'updated_at'>
 type ScheduleEditor = Omit<ScheduleConfig, 'created_at' | 'updated_at'> & { local_id: string }
 
 const defaultSettings = (): SettingsPayload => ({
+  app_display_name: 'Aniu',
   provider_name: 'openai-compatible',
   mx_api_key: '',
   llm_base_url: '',
@@ -172,6 +173,7 @@ export const useAppStore = defineStore('app', () => {
 
   const enabledTaskCount = computed(() => schedules.value.filter((task) => task.enabled).length)
   const accountPositionCount = computed(() => account.value.positions.length)
+  const appDisplayName = computed(() => settings.app_display_name?.trim() || 'Aniu')
   const activeScheduleCards = computed<ScheduleOverviewItem[]>(() => {
     const items = schedules.value
       .filter((item) => item.enabled)
@@ -216,6 +218,7 @@ export const useAppStore = defineStore('app', () => {
   const accountRefreshCooldownText = computed(() => formatCooldownDuration(accountRefreshRemainingMs.value))
 
   function applySettings(payload: AppSettings) {
+    settings.app_display_name = payload.app_display_name?.trim() || 'Aniu'
     settings.provider_name = payload.provider_name
     settings.mx_api_key = payload.mx_api_key ?? ''
     settings.llm_base_url = payload.llm_base_url ?? ''
@@ -411,6 +414,7 @@ export const useAppStore = defineStore('app', () => {
     busy,
     notice,
     errorMessage,
+    appDisplayName,
     enabledTaskCount,
     accountPositionCount,
     activeScheduleCards,

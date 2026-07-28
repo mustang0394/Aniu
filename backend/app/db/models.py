@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Te
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from app.core.constants import DEFAULT_SYSTEM_PROMPT
+from app.core.constants import DEFAULT_APP_DISPLAY_NAME, DEFAULT_SYSTEM_PROMPT
 
 
 class Base(DeclarativeBase):
@@ -18,6 +18,9 @@ class AppSettings(Base):
     __tablename__ = "app_settings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    app_display_name: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_APP_DISPLAY_NAME
+    )
     provider_name: Mapped[str] = mapped_column(String(32), default="openai-compatible")
     mx_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     llm_base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)

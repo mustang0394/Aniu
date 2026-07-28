@@ -118,6 +118,10 @@ def _ensure_app_settings_columns(engine) -> None:
         statements.append(
             "ALTER TABLE app_settings ADD COLUMN capital_seal_amount FLOAT DEFAULT 0"
         )
+    if "app_display_name" not in columns:
+        statements.append(
+            "ALTER TABLE app_settings ADD COLUMN app_display_name VARCHAR(64) DEFAULT 'Aniu'"
+        )
 
     if not statements:
         return
@@ -140,7 +144,11 @@ def _ensure_app_settings_columns(engine) -> None:
                 "'[\"sh_main\",\"sz_main\"]'"
                 "), "
                 "capital_seal_enabled = COALESCE(capital_seal_enabled, 0), "
-                "capital_seal_amount = COALESCE(capital_seal_amount, 0)"
+                "capital_seal_amount = COALESCE(capital_seal_amount, 0), "
+                "app_display_name = COALESCE("
+                "NULLIF(trim(app_display_name), ''), "
+                "'Aniu'"
+                ")"
             )
         )
 

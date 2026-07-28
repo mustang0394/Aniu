@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.auth import create_access_token
 from app.core.config import get_settings
-from app.core.constants import DEFAULT_SYSTEM_PROMPT
+from app.core.constants import DEFAULT_APP_DISPLAY_NAME, DEFAULT_SYSTEM_PROMPT
 from app.db.database import session_scope
 from app.db.models import (
     AppSettings,
@@ -293,6 +293,7 @@ class AniuService:
         if instance is None:
             env = get_settings()
             instance = AppSettings(
+                app_display_name=DEFAULT_APP_DISPLAY_NAME,
                 provider_name="openai-compatible",
                 mx_api_key=env.mx_apikey,
                 llm_base_url=env.openai_base_url,

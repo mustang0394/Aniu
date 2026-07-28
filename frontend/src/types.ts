@@ -2,6 +2,7 @@ export type MarketKey = 'sh_main' | 'sz_main' | 'chinext' | 'star' | 'bse'
 
 export interface AppSettings {
   id: number
+  app_display_name: string
   provider_name: string
   mx_api_key: string | null
   llm_base_url: string | null

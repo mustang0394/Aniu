@@ -10,6 +10,15 @@
       <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <!-- Left column -->
         <div class="flex flex-col gap-4">
+          <UiField label="系统名称" help="显示在侧边栏、聊天助手等位置的产品名称，默认 Aniu。">
+            <input
+              v-model="settings.app_display_name"
+              maxlength="64"
+              placeholder="Aniu"
+              class="field-input"
+            />
+          </UiField>
+
           <UiField label="Base URL" help="大模型 API 的基础地址，默认可填写 OpenAI 兼容地址。">
             <input
               v-model="settings.llm_base_url"

@@ -7,13 +7,13 @@
     <div class="flex items-center gap-3 px-5 pb-5 pt-6">
       <img
         src="/aniu.ico"
-        alt="Aniu"
+        :alt="appDisplayName"
         class="size-11 shrink-0 rounded-[14px] shadow-md"
       />
       <div class="min-w-0">
         <div class="flex items-baseline gap-2">
           <strong class="text-[22px] font-semibold leading-none tracking-tight text-label">
-            Aniu
+            {{ appDisplayName }}
           </strong>
           <span class="text-caption font-medium text-label-tertiary">v{{ appVersion }}</span>
         </div>
@@ -84,9 +84,11 @@
 </template>
 
 <script setup lang="ts">
+import { storeToRefs } from 'pinia'
 import { useRoute } from 'vue-router'
 import appPackage from '../../../package.json'
 import { appNavigation } from '@/config/navigation'
+import { useAppStore } from '@/stores/legacy'
 import NavIcon from './NavIcon.vue'
 
 withDefaults(
@@ -106,6 +108,8 @@ const emit = defineEmits<{
 }>()
 
 const route = useRoute()
+const store = useAppStore()
+const { appDisplayName } = storeToRefs(store)
 const appVersion = appPackage.version
 
 function isActive(path: string) {

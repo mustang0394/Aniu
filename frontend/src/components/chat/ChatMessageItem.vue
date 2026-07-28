@@ -89,8 +89,10 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, defineComponent, h, onBeforeUnmount, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 
 import ChatAttachmentChip from './ChatAttachmentChip.vue'
+import { useAppStore } from '@/stores/legacy'
 import type { ChatMessage, ChatToolCall } from '@/types'
 import { copyText } from '@/utils/clipboard'
 
@@ -116,12 +118,15 @@ const props = defineProps<{
   streaming?: boolean
 }>()
 
+const store = useAppStore()
+const { appDisplayName } = storeToRefs(store)
+
 const attachmentList = computed(() => props.message.attachments ?? [])
 const toolCalls = computed(() => props.message.tool_calls ?? [])
 const roleLabel = computed(() => {
   if (props.message.role === 'user') return '我'
   if (props.message.role === 'system') return '系统'
-  return 'Aniu'
+  return appDisplayName.value
 })
 
 const displayContent = computed(() => {

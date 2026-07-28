@@ -4,7 +4,7 @@
       class="!mb-4"
       title="AI 聊天"
       kicker="Chat"
-      description="与 Aniu 对话，支持附件与工具调用"
+      :description="`与 ${appDisplayName} 对话，支持附件与工具调用`"
     />
 
     <div class="relative grid min-h-[min(72vh,760px)] grid-cols-1 gap-3 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)]">
@@ -63,6 +63,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 
 import ChatConversation from '@/components/chat/ChatConversation.vue'
 import ChatSessionSidebar from '@/components/chat/ChatSessionSidebar.vue'
@@ -71,6 +72,10 @@ import { useChatSession } from '@/composables/useChatSession'
 import { useChatSessions } from '@/composables/useChatSessions'
 import { usePersistentSession } from '@/composables/usePersistentSession'
 import { useRunStream } from '@/composables/useRunStream'
+import { useAppStore } from '@/stores/legacy'
+
+const store = useAppStore()
+const { appDisplayName } = storeToRefs(store)
 
 const {
   sessions,

@@ -79,10 +79,10 @@ import AppTopBar from './AppTopBar.vue'
 const store = useAppStore()
 const router = useRouter()
 const route = useRoute()
-const { errorMessage } = storeToRefs(store)
+const { errorMessage, appDisplayName } = storeToRefs(store)
 const mobileNavOpen = ref(false)
 
-const pageTitle = computed(() => navTitleForPath(route.path))
+const pageTitle = computed(() => navTitleForPath(route.path) ?? appDisplayName.value)
 
 function openMobileNav() {
   mobileNavOpen.value = true
@@ -109,6 +109,9 @@ watch(mobileNavOpen, (open) => {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  void store.loadSettings().catch(() => {
+    // Settings preload is best-effort; brand name falls back to default.
+  })
 })
 
 onBeforeUnmount(() => {

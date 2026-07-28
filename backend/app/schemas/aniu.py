@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.constants import DEFAULT_APP_DISPLAY_NAME
 from skills.mx_core.markets import (
     DEFAULT_ALLOWED_MARKETS,
     dumps_allowed_markets,
@@ -23,6 +24,9 @@ def _mask_key(value: str | None) -> str | None:
 
 
 class AppSettingsBase(BaseModel):
+    app_display_name: str = Field(
+        default=DEFAULT_APP_DISPLAY_NAME, min_length=1, max_length=64
+    )
     provider_name: str = "openai-compatible"
     mx_api_key: str | None = Field(default=None, max_length=512)
     llm_base_url: str | None = Field(default=None, max_length=512)
@@ -44,6 +48,14 @@ class AppSettingsBase(BaseModel):
         default_factory=lambda: list(DEFAULT_ALLOWED_MARKETS),
         min_length=1,
     )
+
+    @field_validator("app_display_name", mode="before")
+    @classmethod
+    def _normalize_app_display_name(cls, value: Any) -> str:
+        if value is None:
+            return DEFAULT_APP_DISPLAY_NAME
+        text = str(value).strip()
+        return text or DEFAULT_APP_DISPLAY_NAME
 
     @field_validator("allowed_markets", mode="before")
     @classmethod
@@ -94,6 +106,10 @@ class AppSettingsRead(AppSettingsBase):
             markets = normalize_allowed_markets(getattr(data, "allowed_markets", None))
         return {
             "id": getattr(data, "id"),
+            "app_display_name": getattr(
+                data, "app_display_name", DEFAULT_APP_DISPLAY_NAME
+            )
+            or DEFAULT_APP_DISPLAY_NAME,
             "provider_name": getattr(data, "provider_name", "openai-compatible"),
             "mx_api_key": getattr(data, "mx_api_key", None),
             "llm_base_url": getattr(data, "llm_base_url", None),

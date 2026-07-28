@@ -150,10 +150,10 @@ class AppSettingsRead(AppSettingsBase):
 
     @model_validator(mode="after")
     def mask_sensitive_fields(self) -> "AppSettingsRead":
+        # API keys stay masked in the settings UI (password fields).
+        # Telegram Bot Token / Chat ID are plain text so users can copy them.
         self.mx_api_key = _mask_key(self.mx_api_key)
         self.llm_api_key = _mask_key(self.llm_api_key)
-        self.tg_bot_token = _mask_key(self.tg_bot_token)
-        self.tg_chat_id = _mask_key(self.tg_chat_id)
         return self
 
 

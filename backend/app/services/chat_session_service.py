@@ -833,6 +833,12 @@ class ChatSessionService:
                                     "finished_at": event.get("ts"),
                                 }
                             )
+                elif event_type == "llm_retry":
+                    # Whole-round retry starts: discard partial tool calls and
+                    # text emitted by the failed attempt so the persisted
+                    # assistant message reflects only the winning round.
+                    captured_tool_calls.clear()
+                    final_content = ""
                 elif event_type == "final_delta":
                     delta = str(event.get("delta") or "")
                     if delta:

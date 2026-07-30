@@ -27,7 +27,6 @@ _DEFAULT_LLM_MAX_RETRIES = 3
 _LLM_RETRY_BASE_SECONDS = 1.0
 _LLM_RETRY_MAX_SECONDS = 20.0
 _LLM_RETRY_CANCEL_POLL_SECONDS = 0.2
-_RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _CHAT_CONFIRMATION_APPEND_PROMPT = (
     "聊天专用安全规则：当操作涉及交易执行、下单、撤单、自选股增删、写入、删除、覆盖、"
     "批量修改或其他会改变数据、文件、配置、状态的破坏性操作时，你必须先明确说明拟执行操作、"
@@ -49,6 +48,15 @@ _TRADE_ENFORCEMENT_PROMPT = (
 
 class LLMStreamCancelled(RuntimeError):
     """Raised when a streaming chat/run should stop because the client disconnected."""
+
+
+class LLMEmptyResultError(Exception):
+    """Raised when an agent loop completes but yields an invalid result.
+
+    Used internally by ``_run_agent_loop_with_retry`` to signal that the whole
+    attempt should be retried (e.g. empty content, or analysis/trade run with
+    no tool calls). It is raised and caught within ``llm_service`` only.
+    """
 
 
 class LLMUpstreamError(RuntimeError):
@@ -78,28 +86,6 @@ def normalize_max_retries(value: Any) -> int:
     except (TypeError, ValueError):
         return _DEFAULT_LLM_MAX_RETRIES
     return max(0, min(10, retries))
-
-
-def _is_retryable_llm_error(exc: BaseException) -> bool:
-    if isinstance(exc, LLMStreamCancelled):
-        return False
-    if isinstance(exc, LLMUpstreamError):
-        status = exc.status_code
-        if status is None:
-            # Stream body error / mid-stream failure without HTTP status.
-            return True
-        return int(status) in _RETRYABLE_HTTP_STATUS_CODES
-    if isinstance(exc, httpx.TimeoutException):
-        return True
-    if isinstance(exc, httpx.HTTPError):
-        return True
-    if isinstance(exc, RuntimeError):
-        message = str(exc)
-        if message.startswith("大模型接口请求超时") or message.startswith(
-            "大模型接口请求失败"
-        ):
-            return True
-    return False
 
 
 def _retry_delay_seconds(attempt_index: int) -> float:
@@ -385,7 +371,7 @@ class LLMService:
             if reasoning_effort is not None
             else getattr(chat_app_settings, "llm_reasoning_effort", None)
         )
-        result = self._agent_loop(
+        result = self._run_agent_loop_with_retry(
             model=model,
             base_url=base_url,
             api_key=api_key,
@@ -401,7 +387,7 @@ class LLMService:
                 getattr(chat_app_settings, "llm_max_retries", _DEFAULT_LLM_MAX_RETRIES)
             ),
         )
-        return result["final_answer"] or "模型本轮未返回可展示内容。"
+        return str(result["final_answer"] or "").strip() or "模型本轮未返回可展示内容。"
 
     def build_initial_request_payload(self, app_settings: Any) -> dict[str, Any]:
         run_type = str(getattr(app_settings, "run_type", "analysis") or "analysis")
@@ -521,7 +507,7 @@ class LLMService:
                 ),
             )
 
-        result = self._agent_loop(
+        result = self._run_agent_loop_with_retry(
             model=app_settings.llm_model,
             base_url=app_settings.llm_base_url,
             api_key=app_settings.llm_api_key,
@@ -541,7 +527,7 @@ class LLMService:
 
         return (
             {
-                "final_answer": result["final_answer"],
+                "final_answer": result["final_answer"] or "模型本轮未返回可展示内容。",
                 "tool_calls": result["tool_history"],
             },
             request_payload,
@@ -620,7 +606,7 @@ class LLMService:
                 _emit("llm_message", iteration=iteration + 1, content=assistant_text)
 
             if not tool_calls:
-                final_message = assistant_text or "模型本轮未返回可展示内容。"
+                final_message = assistant_text
                 stream_meta = response_payload.get("stream_meta")
                 final_streamed = (
                     isinstance(stream_meta, dict)
@@ -630,6 +616,7 @@ class LLMService:
                     self._emit_final_answer_stream(final_message, emit=_emit)
                 return {
                     "final_answer": final_message,
+                    "raw_final_answer": assistant_text,
                     "tool_history": tool_history,
                     "responses": response_history,
                     "final_message": message,
@@ -685,6 +672,109 @@ class LLMService:
 
         raise RuntimeError("大模型工具调用轮次超限，已中止。")
 
+    def _run_agent_loop_with_retry(
+        self,
+        *,
+        model: str,
+        base_url: str,
+        api_key: str,
+        initial_messages: list[dict[str, Any]],
+        run_type: str,
+        timeout_seconds: int,
+        tool_executor: Callable[[str, dict[str, Any]], dict[str, Any]],
+        emit: Any = None,
+        cancel_event: threading.Event | None = None,
+        enable_reasoning_echo: bool = False,
+        reasoning_effort: str | None = None,
+        max_retries: int | None = None,
+    ) -> dict[str, Any]:
+        """Run ``_agent_loop`` with a unified whole-round retry policy.
+
+        Any exception raised by ``_agent_loop`` triggers a retry (up to
+        ``max_retries`` extra attempts). A normally-returned result is also
+        rejected (and retried) when it is deemed invalid for the run type:
+
+        * analysis/trade: the round must have invoked at least one tool;
+          otherwise (including empty content) it is retried.
+        * chat: only a truly empty answer (raw text blank) is retried; a plain
+          text answer without tool calls is a valid success.
+
+        ``LLMStreamCancelled`` (client disconnect) is never retried.
+        """
+        _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
+        budget = normalize_max_retries(max_retries)
+        last_error: BaseException | None = None
+        normalized_effort = normalize_reasoning_effort(reasoning_effort)
+        normalized_retries = normalize_max_retries(max_retries)
+
+        for attempt in range(budget + 1):
+            _raise_if_cancelled(cancel_event)
+            try:
+                result = self._agent_loop(
+                    model=model,
+                    base_url=base_url,
+                    api_key=api_key,
+                    initial_messages=initial_messages,
+                    run_type=run_type,
+                    timeout_seconds=timeout_seconds,
+                    tool_executor=tool_executor,
+                    emit=_emit,
+                    cancel_event=cancel_event,
+                    enable_reasoning_echo=enable_reasoning_echo,
+                    reasoning_effort=normalized_effort,
+                    max_retries=normalized_retries,
+                )
+                raw_answer = str(result.get("raw_final_answer") or "").strip()
+                tool_history = result.get("tool_history") or []
+                if str(run_type or "").strip() in {"analysis", "trade"}:
+                    if not tool_history:
+                        raise LLMEmptyResultError(
+                            "analysis/trade 整轮未调用任何工具，视为无效。"
+                        )
+                else:  # chat
+                    if not raw_answer:
+                        raise LLMEmptyResultError("聊天模式返回空内容，视为无效。")
+                return result
+            except LLMStreamCancelled:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if attempt >= budget:
+                    raise _annotate_retry_exhaustion(exc, attempt) from exc
+
+                delay = _retry_delay_seconds(attempt)
+                if str(run_type or "").strip() == "trade":
+                    logger.warning(
+                        "trade 模式整轮重试，可能重复下单 "
+                        "(attempt %s/%s, %s)",
+                        attempt + 1,
+                        budget,
+                        exc,
+                    )
+                logger.warning(
+                    "LLM agent round attempt %s/%s failed (%s); retrying in %.2fs",
+                    attempt + 1,
+                    budget + 1,
+                    exc,
+                    delay,
+                )
+                _emit(
+                    "llm_retry",
+                    attempt=attempt + 1,
+                    max_retries=budget,
+                    delay_seconds=round(delay, 3),
+                    message=(
+                        f"大模型本轮无效，{delay:.1f} 秒后重试 "
+                        f"({attempt + 1}/{budget})…"
+                    ),
+                    error=str(exc),
+                )
+                _sleep_with_cancel(delay, cancel_event)
+
+        if last_error is not None:
+            raise _annotate_retry_exhaustion(last_error, budget)
+        raise RuntimeError("大模型整轮请求失败。")
+
     def _emit_final_answer_stream(self, content: str, *, emit: Callable[..., Any]) -> None:
         final_text = str(content or "").strip()
         emit("final_started", char_count=len(final_text))
@@ -711,59 +801,29 @@ class LLMService:
         cancel_event: threading.Event | None = None,
         max_retries: int | None = None,
     ) -> dict[str, Any]:
-        """Call the LLM stream endpoint with configurable transient retries.
+        """Single logical stream attempt (no transient retry).
 
-        ``max_retries`` is the number of *extra* attempts after the first failure
-        (default 3 → up to 4 logical HTTP tries). The include_usage 400 fallback
-        remains an inner compatibility retry and does not consume this quota.
+        Whole-round retry is handled by ``_run_agent_loop_with_retry``; this
+        method performs one HTTP attempt and keeps the include_usage 400
+        compatibility fallback (which does not consume the retry budget).
+        ``max_retries`` is retained for signature compatibility (some callers /
+        tests still pass it) but no longer drives retries here.
         """
         _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
-        retries = normalize_max_retries(max_retries)
-        last_error: BaseException | None = None
-
-        for attempt in range(retries + 1):
-            _raise_if_cancelled(cancel_event)
-            try:
-                return self._call_llm_stream_once(
-                    base_url=base_url,
-                    api_key=api_key,
-                    payload=payload,
-                    timeout_seconds=timeout_seconds,
-                    emit=_emit,
-                    cancel_event=cancel_event,
-                )
-            except LLMStreamCancelled:
-                raise
-            except Exception as exc:
-                last_error = exc
-                if not _is_retryable_llm_error(exc) or attempt >= retries:
-                    raise _annotate_retry_exhaustion(exc, attempt) from exc
-
-                delay = _retry_delay_seconds(attempt)
-                error_text = str(exc)
-                logger.warning(
-                    "LLM stream attempt %s/%s failed (%s); retrying in %.2fs",
-                    attempt + 1,
-                    retries + 1,
-                    error_text,
-                    delay,
-                )
-                _emit(
-                    "llm_retry",
-                    attempt=attempt + 1,
-                    max_retries=retries,
-                    delay_seconds=round(delay, 3),
-                    message=(
-                        f"大模型请求失败，{delay:.1f} 秒后重试 "
-                        f"({attempt + 1}/{retries})…"
-                    ),
-                    error=error_text,
-                )
-                _sleep_with_cancel(delay, cancel_event)
-
-        if last_error is not None:
-            raise _annotate_retry_exhaustion(last_error, retries)
-        raise RuntimeError("大模型流式请求失败。")
+        _raise_if_cancelled(cancel_event)
+        try:
+            return self._call_llm_stream_once(
+                base_url=base_url,
+                api_key=api_key,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+                emit=_emit,
+                cancel_event=cancel_event,
+            )
+        except LLMStreamCancelled:
+            raise
+        except Exception as exc:
+            raise _annotate_retry_exhaustion(exc, 0) from exc
 
     def _call_llm_stream_once(
         self,
@@ -1022,41 +1082,23 @@ class LLMService:
         max_retries: int | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
-        """Non-streaming LLM call with the same transient retry policy as streaming.
+        """Non-streaming LLM call (single attempt, no transient retry).
 
         Kept for parity; primary runtime path uses ``_call_llm_stream``.
+        Whole-round retry is handled by ``_run_agent_loop_with_retry``.
         """
-        retries = normalize_max_retries(max_retries)
-        last_error: BaseException | None = None
-
-        for attempt in range(retries + 1):
-            _raise_if_cancelled(cancel_event)
-            try:
-                return self._call_llm_once(
-                    base_url=base_url,
-                    api_key=api_key,
-                    payload=payload,
-                    timeout_seconds=timeout_seconds,
-                )
-            except LLMStreamCancelled:
-                raise
-            except Exception as exc:
-                last_error = exc
-                if not _is_retryable_llm_error(exc) or attempt >= retries:
-                    raise _annotate_retry_exhaustion(exc, attempt) from exc
-                delay = _retry_delay_seconds(attempt)
-                logger.warning(
-                    "LLM request attempt %s/%s failed (%s); retrying in %.2fs",
-                    attempt + 1,
-                    retries + 1,
-                    exc,
-                    delay,
-                )
-                _sleep_with_cancel(delay, cancel_event)
-
-        if last_error is not None:
-            raise _annotate_retry_exhaustion(last_error, retries)
-        raise RuntimeError("大模型请求失败。")
+        _raise_if_cancelled(cancel_event)
+        try:
+            return self._call_llm_once(
+                base_url=base_url,
+                api_key=api_key,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+            )
+        except LLMStreamCancelled:
+            raise
+        except Exception as exc:
+            raise _annotate_retry_exhaustion(exc, 0) from exc
 
     def _call_llm_once(
         self,

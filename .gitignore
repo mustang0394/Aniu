@@ -61,6 +61,7 @@ backend/data/skill_workspace/
 
 # Local tool config
 .claude/
+.pi-subagents
 
 # Local notes / scratch files
 /bug-indexed-cupcake.md

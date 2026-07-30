@@ -19,30 +19,6 @@ def test_normalize_max_retries() -> None:
     assert normalize_max_retries("2") == 2
 
 
-def test_is_retryable_llm_error() -> None:
-    from app.services.llm_service import (
-        LLMStreamCancelled,
-        LLMUpstreamError,
-        _is_retryable_llm_error,
-    )
-
-    assert _is_retryable_llm_error(LLMUpstreamError("限流", status_code=429))
-    assert _is_retryable_llm_error(LLMUpstreamError("5xx", status_code=503))
-    assert _is_retryable_llm_error(LLMUpstreamError("stream body error"))
-    assert _is_retryable_llm_error(httpx.ReadTimeout("timeout"))
-    assert _is_retryable_llm_error(httpx.ConnectError("boom"))
-    assert _is_retryable_llm_error(
-        RuntimeError("大模型接口请求超时 (30s)，请检查网络或增加超时时间。")
-    )
-    assert _is_retryable_llm_error(RuntimeError("大模型接口请求失败: connection reset"))
-
-    assert not _is_retryable_llm_error(LLMUpstreamError("bad key", status_code=401))
-    assert not _is_retryable_llm_error(LLMUpstreamError("bad req", status_code=400))
-    assert not _is_retryable_llm_error(LLMUpstreamError("forbidden", status_code=403))
-    assert not _is_retryable_llm_error(LLMStreamCancelled("gone"))
-    assert not _is_retryable_llm_error(RuntimeError("大模型未返回 choices。"))
-
-
 def test_retry_delay_seconds_capped(monkeypatch) -> None:
     from app.services import llm_service as llm_module
 
@@ -56,111 +32,14 @@ def test_retry_delay_seconds_capped(monkeypatch) -> None:
     assert llm_module._retry_delay_seconds(10) == pytest.approx(20.0)
 
 
-def test_call_llm_stream_retries_then_succeeds(monkeypatch) -> None:
-    from app.services.llm_service import LLMService, LLMUpstreamError
-
-    service = LLMService()
-    calls = {"n": 0}
-    sleeps: list[float] = []
-    events: list[tuple[str, dict]] = []
-
-    def fake_once(**kwargs):
-        del kwargs
-        calls["n"] += 1
-        if calls["n"] < 3:
-            raise LLMUpstreamError("temporary", status_code=503)
-        return {
-            "choices": [{"message": {"content": "ok", "tool_calls": []}}],
-            "stream_meta": {"final_streamed": True},
-        }
-
-    monkeypatch.setattr(service, "_call_llm_stream_once", fake_once)
-    monkeypatch.setattr(
-        "app.services.llm_service._sleep_with_cancel",
-        lambda delay, cancel_event=None: sleeps.append(delay),
-    )
-
-    def emit(event_type: str, **data):
-        events.append((event_type, data))
-
-    result = service._call_llm_stream(
-        base_url="https://example.com/v1",
-        api_key="token",
-        payload={"model": "demo", "messages": []},
-        timeout_seconds=5,
-        emit=emit,
-        max_retries=3,
-    )
-    assert result["choices"][0]["message"]["content"] == "ok"
-    assert calls["n"] == 3
-    assert len(sleeps) == 2
-    assert [event[0] for event in events] == ["llm_retry", "llm_retry"]
-    assert events[0][1]["attempt"] == 1
-    assert events[0][1]["max_retries"] == 3
+# ---------------------------------------------------------------------------
+# _call_llm_stream is now a single logical attempt (whole-round retry lives in
+# _run_agent_loop_with_retry). The include_usage 400 fallback remains inside
+# _call_llm_stream_once and must not sleep.
+# ---------------------------------------------------------------------------
 
 
-def test_call_llm_stream_exhausts_retries(monkeypatch) -> None:
-    from app.services.llm_service import LLMService, LLMUpstreamError
-
-    service = LLMService()
-    calls = {"n": 0}
-
-    def fake_once(**kwargs):
-        del kwargs
-        calls["n"] += 1
-        raise LLMUpstreamError("rate limited", status_code=429)
-
-    monkeypatch.setattr(service, "_call_llm_stream_once", fake_once)
-    monkeypatch.setattr(
-        "app.services.llm_service._sleep_with_cancel",
-        lambda delay, cancel_event=None: None,
-    )
-
-    with pytest.raises(LLMUpstreamError) as exc_info:
-        service._call_llm_stream(
-            base_url="https://example.com/v1",
-            api_key="token",
-            payload={"model": "demo", "messages": []},
-            timeout_seconds=5,
-            max_retries=2,
-        )
-    assert calls["n"] == 3
-    assert "已重试 2 次仍失败" in str(exc_info.value)
-    assert exc_info.value.status_code == 429
-
-
-def test_call_llm_stream_no_retry_on_401(monkeypatch) -> None:
-    from app.services.llm_service import LLMService, LLMUpstreamError
-
-    service = LLMService()
-    calls = {"n": 0}
-
-    def fake_once(**kwargs):
-        del kwargs
-        calls["n"] += 1
-        raise LLMUpstreamError("bad key", status_code=401)
-
-    monkeypatch.setattr(service, "_call_llm_stream_once", fake_once)
-    slept = {"n": 0}
-    monkeypatch.setattr(
-        "app.services.llm_service._sleep_with_cancel",
-        lambda delay, cancel_event=None: slept.__setitem__("n", slept["n"] + 1),
-    )
-
-    with pytest.raises(LLMUpstreamError) as exc_info:
-        service._call_llm_stream(
-            base_url="https://example.com/v1",
-            api_key="token",
-            payload={"model": "demo", "messages": []},
-            timeout_seconds=5,
-            max_retries=3,
-        )
-    assert calls["n"] == 1
-    assert slept["n"] == 0
-    assert "已重试" not in str(exc_info.value)
-
-
-def test_call_llm_stream_max_retries_zero(monkeypatch) -> None:
+def test_call_llm_stream_single_attempt_no_retry(monkeypatch) -> None:
     from app.services.llm_service import LLMService, LLMUpstreamError
 
     service = LLMService()
@@ -175,7 +54,7 @@ def test_call_llm_stream_max_retries_zero(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.services.llm_service._sleep_with_cancel",
         lambda delay, cancel_event=None: (_ for _ in ()).throw(
-            AssertionError("should not sleep")
+            AssertionError("transient retry should not run")
         ),
     )
 
@@ -185,47 +64,43 @@ def test_call_llm_stream_max_retries_zero(monkeypatch) -> None:
             api_key="token",
             payload={"model": "demo", "messages": []},
             timeout_seconds=5,
-            max_retries=0,
-        )
-    assert calls["n"] == 1
-
-
-def test_call_llm_stream_cancel_during_backoff(monkeypatch) -> None:
-    from app.services.llm_service import LLMService, LLMStreamCancelled, LLMUpstreamError
-
-    service = LLMService()
-    calls = {"n": 0}
-    cancel_event = threading.Event()
-
-    def fake_once(**kwargs):
-        del kwargs
-        calls["n"] += 1
-        raise LLMUpstreamError("temporary", status_code=503)
-
-    def fake_sleep(delay, cancel_event=None):
-        del delay
-        if cancel_event is not None:
-            cancel_event.set()
-        from app.services.llm_service import _raise_if_cancelled
-
-        _raise_if_cancelled(cancel_event)
-
-    monkeypatch.setattr(service, "_call_llm_stream_once", fake_once)
-    monkeypatch.setattr("app.services.llm_service._sleep_with_cancel", fake_sleep)
-
-    with pytest.raises(LLMStreamCancelled):
-        service._call_llm_stream(
-            base_url="https://example.com/v1",
-            api_key="token",
-            payload={"model": "demo", "messages": []},
-            timeout_seconds=5,
-            cancel_event=cancel_event,
             max_retries=3,
         )
     assert calls["n"] == 1
 
 
-def test_include_usage_fallback_does_not_consume_retry_quota(monkeypatch) -> None:
+def test_call_llm_stream_no_retry_on_401(monkeypatch) -> None:
+    from app.services.llm_service import LLMService, LLMUpstreamError
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_once(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        raise LLMUpstreamError("bad key", status_code=401)
+
+    monkeypatch.setattr(service, "_call_llm_stream_once", fake_once)
+    monkeypatch.setattr(
+        "app.services.llm_service._sleep_with_cancel",
+        lambda delay, cancel_event=None: (_ for _ in ()).throw(
+            AssertionError("should not sleep")
+        ),
+    )
+
+    with pytest.raises(LLMUpstreamError) as exc_info:
+        service._call_llm_stream(
+            base_url="https://example.com/v1",
+            api_key="token",
+            payload={"model": "demo", "messages": []},
+            timeout_seconds=5,
+            max_retries=3,
+        )
+    assert calls["n"] == 1
+    assert "已重试" not in str(exc_info.value)
+
+
+def test_include_usage_fallback_does_not_sleep(monkeypatch) -> None:
     from app.services.llm_service import LLMService, LLMUpstreamError
 
     service = LLMService()
@@ -261,6 +136,339 @@ def test_include_usage_fallback_does_not_consume_retry_quota(monkeypatch) -> Non
     assert consume_calls == [True, False]
 
 
+# ---------------------------------------------------------------------------
+# _run_agent_loop_with_retry — the unified whole-round retry policy.
+# ---------------------------------------------------------------------------
+
+
+def _make_result(*, final_answer: str, tool_history: list | None = None) -> dict:
+    return {
+        "final_answer": final_answer,
+        "raw_final_answer": final_answer,
+        "tool_history": tool_history or [],
+        "responses": [],
+        "final_message": {},
+        "messages": [],
+    }
+
+
+def _patch_no_sleep(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.llm_service._sleep_with_cancel",
+        lambda delay, cancel_event=None: None,
+    )
+
+
+def test_agent_loop_with_retry_analysis_no_tools_retries_then_fails(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        return _make_result(final_answer="分析结论", tool_history=[])
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    with pytest.raises(Exception):
+        service._run_agent_loop_with_retry(
+            model="demo",
+            base_url="https://example.com/v1",
+            api_key="token",
+            initial_messages=[{"role": "user", "content": "hi"}],
+            run_type="analysis",
+            timeout_seconds=5,
+            tool_executor=lambda *_a, **_k: {},
+            max_retries=2,
+        )
+    # 1 initial + 2 retries = 3 whole-round attempts.
+    assert calls["n"] == 3
+
+
+def test_agent_loop_with_retry_analysis_with_tools_succeeds(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        return _make_result(
+            final_answer="分析结论",
+            tool_history=[{"name": "mx_quote", "arguments": {}, "result": {"ok": True}}],
+        )
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    result = service._run_agent_loop_with_retry(
+        model="demo",
+        base_url="https://example.com/v1",
+        api_key="token",
+        initial_messages=[{"role": "user", "content": "hi"}],
+        run_type="analysis",
+        timeout_seconds=5,
+        tool_executor=lambda *_a, **_k: {},
+        max_retries=3,
+    )
+    assert calls["n"] == 1
+    assert result["tool_history"]
+
+
+def test_agent_loop_with_retry_trade_no_tools_retries(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        return _make_result(final_answer="建议买入", tool_history=[])
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    with pytest.raises(Exception):
+        service._run_agent_loop_with_retry(
+            model="demo",
+            base_url="https://example.com/v1",
+            api_key="token",
+            initial_messages=[{"role": "user", "content": "hi"}],
+            run_type="trade",
+            timeout_seconds=5,
+            tool_executor=lambda *_a, **_k: {},
+            max_retries=1,
+        )
+    assert calls["n"] == 2
+
+
+def test_agent_loop_with_retry_chat_empty_retries(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        return _make_result(final_answer="", tool_history=[])
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    with pytest.raises(Exception):
+        service._run_agent_loop_with_retry(
+            model="demo",
+            base_url="https://example.com/v1",
+            api_key="token",
+            initial_messages=[{"role": "user", "content": "hi"}],
+            run_type="chat",
+            timeout_seconds=5,
+            tool_executor=lambda *_a, **_k: {},
+            max_retries=2,
+        )
+    assert calls["n"] == 3
+
+
+def test_agent_loop_with_retry_chat_text_without_tools_succeeds(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        return _make_result(final_answer="纯文字回答", tool_history=[])
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    result = service._run_agent_loop_with_retry(
+        model="demo",
+        base_url="https://example.com/v1",
+        api_key="token",
+        initial_messages=[{"role": "user", "content": "hi"}],
+        run_type="chat",
+        timeout_seconds=5,
+        tool_executor=lambda *_a, **_k: {},
+        max_retries=3,
+    )
+    assert calls["n"] == 1
+    assert result["final_answer"] == "纯文字回答"
+
+
+def test_agent_loop_with_retry_exception_retries_then_raises(monkeypatch) -> None:
+    from app.services.llm_service import LLMService, LLMUpstreamError
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        raise LLMUpstreamError("5xx", status_code=503)
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    with pytest.raises(LLMUpstreamError) as exc_info:
+        service._run_agent_loop_with_retry(
+            model="demo",
+            base_url="https://example.com/v1",
+            api_key="token",
+            initial_messages=[{"role": "user", "content": "hi"}],
+            run_type="analysis",
+            timeout_seconds=5,
+            tool_executor=lambda *_a, **_k: {},
+            max_retries=2,
+        )
+    assert calls["n"] == 3
+    assert "已重试 2 次仍失败" in str(exc_info.value)
+
+
+def test_agent_loop_with_retry_non_retryable_status_still_retries(monkeypatch) -> None:
+    """Unified policy: every failure (even 401/400) triggers a whole-round retry."""
+    from app.services.llm_service import LLMService, LLMUpstreamError
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        raise LLMUpstreamError("bad key", status_code=401)
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    with pytest.raises(LLMUpstreamError):
+        service._run_agent_loop_with_retry(
+            model="demo",
+            base_url="https://example.com/v1",
+            api_key="token",
+            initial_messages=[{"role": "user", "content": "hi"}],
+            run_type="analysis",
+            timeout_seconds=5,
+            tool_executor=lambda *_a, **_k: {},
+            max_retries=1,
+        )
+    # 401 now also retried under the unified whole-round policy.
+    assert calls["n"] == 2
+
+
+def test_agent_loop_with_retry_cancel_not_retried(monkeypatch) -> None:
+    from app.services.llm_service import LLMService, LLMStreamCancelled
+
+    service = LLMService()
+    calls = {"n": 0}
+    cancel_event = threading.Event()
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        raise LLMStreamCancelled("客户端连接已断开。")
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    with pytest.raises(LLMStreamCancelled):
+        service._run_agent_loop_with_retry(
+            model="demo",
+            base_url="https://example.com/v1",
+            api_key="token",
+            initial_messages=[{"role": "user", "content": "hi"}],
+            run_type="chat",
+            timeout_seconds=5,
+            tool_executor=lambda *_a, **_k: {},
+            cancel_event=cancel_event,
+            max_retries=3,
+        )
+    assert calls["n"] == 1
+
+
+def test_agent_loop_with_retry_retries_then_succeeds(monkeypatch) -> None:
+    """First round invalid (analysis, no tools) then second round valid."""
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    calls = {"n": 0}
+    events: list[tuple[str, dict]] = []
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        if calls["n"] < 2:
+            return _make_result(final_answer="分析结论", tool_history=[])
+        return _make_result(
+            final_answer="分析结论",
+            tool_history=[{"name": "mx_quote", "arguments": {}, "result": {"ok": True}}],
+        )
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    def emit(event_type: str, **data):
+        events.append((event_type, data))
+
+    result = service._run_agent_loop_with_retry(
+        model="demo",
+        base_url="https://example.com/v1",
+        api_key="token",
+        initial_messages=[{"role": "user", "content": "hi"}],
+        run_type="analysis",
+        timeout_seconds=5,
+        tool_executor=lambda *_a, **_k: {},
+        emit=emit,
+        max_retries=3,
+    )
+    assert calls["n"] == 2
+    assert result["tool_history"]
+    assert [event[0] for event in events] == ["llm_retry"]
+    assert events[0][1]["attempt"] == 1
+    assert events[0][1]["max_retries"] == 3
+
+
+def test_agent_loop_with_retry_max_retries_zero(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        return _make_result(final_answer="分析结论", tool_history=[])
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    with pytest.raises(Exception):
+        service._run_agent_loop_with_retry(
+            model="demo",
+            base_url="https://example.com/v1",
+            api_key="token",
+            initial_messages=[{"role": "user", "content": "hi"}],
+            run_type="analysis",
+            timeout_seconds=5,
+            tool_executor=lambda *_a, **_k: {},
+            max_retries=0,
+        )
+    assert calls["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Plumbing: _agent_loop still forwards max_retries to _call_llm_stream (now a
+# no-op for retries but kept for signature compatibility), and chat() forwards
+# llm_max_retries from app settings into the wrapper.
+# ---------------------------------------------------------------------------
+
+
 def test_agent_loop_passes_max_retries(monkeypatch) -> None:
     from app.services.llm_service import LLMService
 
@@ -294,17 +502,18 @@ def test_chat_reads_max_retries_from_app_settings(monkeypatch) -> None:
     service = LLMService()
     seen: dict[str, object] = {}
 
-    def fake_agent_loop(**kwargs):
+    def fake_wrapper(**kwargs):
         seen["max_retries"] = kwargs.get("max_retries")
         return {
             "final_answer": "hello",
+            "raw_final_answer": "hello",
             "tool_history": [],
             "responses": [],
             "final_message": {},
             "messages": [],
         }
 
-    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    monkeypatch.setattr(service, "_run_agent_loop_with_retry", fake_wrapper)
     answer = service.chat(
         model="demo",
         base_url="https://example.com/v1",

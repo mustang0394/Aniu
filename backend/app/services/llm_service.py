@@ -578,17 +578,13 @@ class LLMService:
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
             _raise_if_cancelled(cancel_event)
-            forced_first_round = iteration == 0 and str(run_type or "").strip() in {
-                "analysis",
-                "trade",
-            }
             iteration_payload = self._apply_reasoning_effort(
                 {
                     "model": model,
                     "temperature": _LLM_TEMPERATURE,
                     "messages": messages,
                     "tools": skill_registry.build_tools(run_type=run_type),
-                    "tool_choice": "required" if forced_first_round else "auto",
+                    "tool_choice": "auto",
                 },
                 normalized_effort,
             )

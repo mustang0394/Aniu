@@ -675,109 +675,244 @@ def test_execute_run_rolls_back_partial_trade_orders_when_order_persist_fails(
     assert orders == []
 
 
-def test_trading_calendar_service_can_fill_missing_year(monkeypatch, tmp_path) -> None:
+def test_trading_calendar_service_parses_szse_month_payload(monkeypatch, tmp_path) -> None:
     from app.services.trading_calendar_service import TradingCalendarService
 
     service = TradingCalendarService()
     service._data_path = tmp_path / "trading_calendar.json"
-    service._calendar = {"version": 1, "source": "codebuddy_trade_cal", "years": {}}
 
-    monkeypatch.setattr(
-        service,
-        "_fetch_year",
-        lambda year: ["2027-01-04", "2027-01-05"],
-    )
-
-    service.ensure_years([2027])
-
-    assert service._calendar["years"]["2027"]["trading_days"] == [
-        "2027-01-04",
-        "2027-01-05",
-    ]
-    assert service._data_path.exists()
-
-
-def test_trading_calendar_service_warms_current_year_and_tolerates_next_year_failure(
-    monkeypatch, tmp_path
-) -> None:
-    from app.services.trading_calendar_service import TradingCalendarService
-
-    service = TradingCalendarService()
-    service._data_path = tmp_path / "trading_calendar.json"
-    service._calendar = {"version": 1, "source": "codebuddy_trade_cal", "years": {}}
-
-    def fake_query(year: int) -> list[str]:
-        if year == 2026:
-            return ["2026-01-05"]
-        raise RuntimeError("next year unavailable")
-
-    monkeypatch.setattr(service, "_fetch_year", fake_query)
-
-    service.warm_up_years(2026)
-
-    assert service._calendar["years"]["2026"]["trading_days"] == ["2026-01-05"]
-    assert "2027" not in service._calendar["years"]
-
-
-def test_trading_calendar_service_normalizes_http_trade_cal_rows(tmp_path) -> None:
-    from app.services.trading_calendar_service import TradingCalendarService
-
-    service = TradingCalendarService()
-    service._data_path = tmp_path / "trading_calendar.json"
-    rows = service._normalize_rows(
-        ["exchange", "cal_date", "is_open", "pretrade_date"],
-        [
-            ["SSE", "20270102", 1, "20261231"],
-            ["SSE", "20270103", 0, "20270102"],
-            ["SSE", "20270104", "1", "20270102"],
+    payload = {
+        "data": [
+            {"zrxh": 6, "jybz": "1", "jyrq": "2026-08-07"},
+            {"zrxh": 7, "jybz": "0", "jyrq": "2026-08-08"},
+            {"zrxh": 1, "jybz": "0", "jyrq": "2026-08-09"},
+            {"zrxh": 2, "jybz": "1", "jyrq": "2026-08-10"},
         ],
-    )
+        "nowdate": "2026-07-31",
+    }
 
-    trading_days = [
-        service._normalize_calendar_date(str(row["cal_date"]))
-        for row in rows
-        if service._is_open_value(row.get("is_open"))
-    ]
+    captured = {}
 
-    assert trading_days == ["2027-01-02", "2027-01-04"]
+    class FakeResponse:
+        def __init__(self, data):
+            self._data = data
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._data
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        return FakeResponse(payload)
+
+    monkeypatch.setattr("app.services.trading_calendar_service.httpx.get", fake_get)
+
+    result = service._fetch_month_once(2026, 8)
+
+    assert result == ["2026-08-07", "2026-08-10"]
+    assert captured["url"] == "https://www.szse.cn/api/report/exchange/onepersistenthour/monthList"
+    assert captured["params"] == {"month": "2026-08"}
 
 
-def test_trading_calendar_service_retries_remote_fetch_until_success() -> None:
+def test_trading_calendar_service_empty_data_is_success_not_retried(monkeypatch, tmp_path) -> None:
     from app.services.trading_calendar_service import TradingCalendarService
 
     service = TradingCalendarService()
-    attempts: list[int] = []
+    service._data_path = tmp_path / "trading_calendar.json"
+    calls = {"n": 0}
 
-    def fake_fetch_once(year: int) -> list[str]:
-        attempts.append(year)
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [], "nowdate": "2026-07-31"}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls["n"] += 1
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.trading_calendar_service.httpx.get", fake_get)
+
+    result = service._fetch_month_once(2027, 1)
+    assert result == []
+    assert calls["n"] == 1  # empty data not retried
+
+
+def test_trading_calendar_service_retries_remote_fetch_until_success(monkeypatch) -> None:
+    from app.services.trading_calendar_service import TradingCalendarService
+
+    service = TradingCalendarService()
+    attempts: list[tuple[int, int]] = []
+
+    def fake_fetch_once(year: int, month: int) -> list[str]:
+        attempts.append((year, month))
         if len(attempts) < 3:
             raise RuntimeError("temporary failure")
         return ["2027-01-04"]
 
-    service._fetch_year_once = fake_fetch_once  # type: ignore[method-assign]
+    service._fetch_month_once = fake_fetch_once  # type: ignore[method-assign]
 
-    result = service._fetch_year(2027)
+    result = service._fetch_month(2027, 1)
 
     assert result == ["2027-01-04"]
-    assert attempts == [2027, 2027, 2027]
+    assert attempts == [(2027, 1), (2027, 1), (2027, 1)]
 
 
-def test_trading_calendar_service_raises_after_retry_limit() -> None:
+def test_trading_calendar_service_raises_after_retry_limit(monkeypatch) -> None:
     from app.services.trading_calendar_service import TradingCalendarService
 
     service = TradingCalendarService()
-    attempts: list[int] = []
+    attempts: list[tuple[int, int]] = []
 
-    def fake_fetch_once(year: int) -> list[str]:
-        attempts.append(year)
+    def fake_fetch_once(year: int, month: int) -> list[str]:
+        attempts.append((year, month))
         raise RuntimeError("temporary failure")
 
-    service._fetch_year_once = fake_fetch_once  # type: ignore[method-assign]
+    service._fetch_month_once = fake_fetch_once  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="已重试 3 次仍失败"):
-        service._fetch_year(2027)
+        service._fetch_month(2027, 1)
 
-    assert attempts == [2027, 2027, 2027, 2027]
+    assert attempts == [(2027, 1), (2027, 1), (2027, 1), (2027, 1)]
+
+
+def test_trading_calendar_service_ensure_month_merges_and_is_idempotent(monkeypatch, tmp_path) -> None:
+    from app.services.trading_calendar_service import TradingCalendarService
+
+    service = TradingCalendarService()
+    service._data_path = tmp_path / "trading_calendar.json"
+    service._calendar = {"version": 1, "source": "szse_trade_cal", "years": {}}
+
+    calls = {"n": 0}
+
+    def fake_fetch(year: int, month: int) -> list[str]:
+        calls["n"] += 1
+        return ["2027-01-04", "2027-01-05"]
+
+    monkeypatch.setattr(service, "_fetch_month", fake_fetch)
+
+    service.ensure_month(2027, 1)
+    assert service._calendar["years"]["2027"]["trading_days"] == ["2027-01-04", "2027-01-05"]
+    assert service._data_path.exists()
+
+    # Second call: month already has data -> no fetch.
+    service.ensure_month(2027, 1)
+    assert calls["n"] == 1
+
+
+def test_trading_calendar_service_ensure_month_throttles_failures_per_day(monkeypatch, tmp_path) -> None:
+    from app.services.trading_calendar_service import TradingCalendarService
+    from datetime import date as date_cls
+
+    service = TradingCalendarService()
+    service._data_path = tmp_path / "trading_calendar.json"
+    service._calendar = {"version": 1, "source": "szse_trade_cal", "years": {}}
+
+    calls = {"n": 0}
+
+    def fake_fetch(year: int, month: int) -> list[str]:
+        calls["n"] += 1
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(service, "_fetch_month", fake_fetch)
+
+    service.ensure_month(2027, 1)
+    assert calls["n"] == 1
+    # Same day -> throttled, no new attempt.
+    service.ensure_month(2027, 1)
+    assert calls["n"] == 1
+    # Next day -> retry allowed.
+    service._month_last_attempt[(2027, 1)] = date_cls(2020, 1, 1)
+    service.ensure_month(2027, 1)
+    assert calls["n"] == 2
+
+
+def test_trading_calendar_service_weekday_fallback_when_no_data(monkeypatch, tmp_path) -> None:
+    from datetime import date as date_cls
+    from app.services.trading_calendar_service import TradingCalendarService
+
+    service = TradingCalendarService()
+    service._data_path = tmp_path / "trading_calendar.json"
+    service._calendar = {"version": 1, "source": "szse_trade_cal", "years": {}}
+
+    def fake_fetch(year: int, month: int) -> list[str]:
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(service, "_fetch_month", fake_fetch)
+
+    # Monday 2026-08-03 -> fallback True (no real data for the month).
+    assert service.is_trading_day(date_cls(2026, 8, 3)) is True
+    # Saturday 2026-08-08 -> fallback False.
+    assert service.is_trading_day(date_cls(2026, 8, 8)) is False
+    # Cache not polluted: trading_days still empty (next day could retry).
+    assert service._calendar["years"].get("2026", {}).get("trading_days") in (None, [])
+
+
+def test_trading_calendar_service_real_data_overrides_fallback(monkeypatch, tmp_path) -> None:
+    from datetime import date as date_cls
+    from app.services.trading_calendar_service import TradingCalendarService
+
+    service = TradingCalendarService()
+    service._data_path = tmp_path / "trading_calendar.json"
+    service._calendar = {"version": 1, "source": "szse_trade_cal", "years": {}}
+
+    def fake_fetch(year: int, month: int) -> list[str]:
+        return ["2026-08-03"]  # only Aug 3 is a trading day
+
+    monkeypatch.setattr(service, "_fetch_month", fake_fetch)
+
+    assert service.is_trading_day(date_cls(2026, 8, 3)) is True
+    # Saturday has real data for the month -> genuine non-trading day.
+    assert service.is_trading_day(date_cls(2026, 8, 8)) is False
+
+
+def test_trading_calendar_service_legacy_year_cache_is_reused(monkeypatch, tmp_path) -> None:
+    from app.services.trading_calendar_service import TradingCalendarService
+
+    service = TradingCalendarService()
+    service._data_path = tmp_path / "trading_calendar.json"
+    # Legacy cache: no cached_months marker, full-year data from old source.
+    service._calendar = {
+        "version": 1,
+        "source": "codebuddy_trade_cal",
+        "years": {"2026": {"trading_days": ["2026-08-04", "2026-08-05"]}},
+    }
+
+    calls = {"n": 0}
+
+    def fake_fetch(year: int, month: int) -> list[str]:
+        calls["n"] += 1
+        return ["2026-08-06"]
+
+    monkeypatch.setattr(service, "_fetch_month", fake_fetch)
+
+    # August 2026 already has data -> skipped, no fetch.
+    service.ensure_month(2026, 8)
+    assert calls["n"] == 0
+    assert service.is_trading_day(__import__("datetime").date(2026, 8, 4)) is True
+
+
+def test_trading_calendar_service_ensure_months_batch(monkeypatch, tmp_path) -> None:
+    from app.services.trading_calendar_service import TradingCalendarService
+
+    service = TradingCalendarService()
+    service._data_path = tmp_path / "trading_calendar.json"
+    service._calendar = {"version": 1, "source": "szse_trade_cal", "years": {}}
+
+    seen: list[tuple[int, int]] = []
+
+    def fake_fetch(year: int, month: int) -> list[str]:
+        seen.append((year, month))
+        return [f"{year}-{month:02d}-05"]
+
+    monkeypatch.setattr(service, "_fetch_month", fake_fetch)
+
+    service.ensure_months(["2026-08", "2026-09", "bad", "2026-13"])
+    assert seen == [(2026, 8), (2026, 9)]
 
 
 def test_order_status_text_derives_from_fill_progress() -> None:

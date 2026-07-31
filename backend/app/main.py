@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 import logging
 from pathlib import Path
 
@@ -33,12 +33,15 @@ async def app_lifespan(_app: FastAPI):
     skill_registry.reload()
     with session_scope() as db:
         skill_admin_service.apply_persisted_state(db)
-    current_year = date.today().year
-    trading_calendar_service.ensure_years([current_year])
+    today = date.today()
+    next_month_date = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
     try:
-        trading_calendar_service.ensure_years([current_year + 1])
+        trading_calendar_service.ensure_months([
+            f"{today.year}-{today.month:02d}",
+            f"{next_month_date.year}-{next_month_date.month:02d}",
+        ])
     except Exception as exc:
-        logger.warning("next-year trading calendar warm up skipped: %s", exc)
+        logger.warning("trading calendar warm up skipped: %s", exc)
     scheduler_service.start()
     try:
         yield

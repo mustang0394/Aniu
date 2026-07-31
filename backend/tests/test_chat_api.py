@@ -235,28 +235,25 @@ def test_run_stream_endpoint_passes_manual_trade_run_type(monkeypatch, tmp_path)
     get_settings.cache_clear()
 
 
-def test_app_startup_requires_current_year_trading_calendar(monkeypatch, tmp_path) -> None:
+def test_app_startup_tolerates_trading_calendar_warmup_failure(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("APP_LOGIN_PASSWORD", "release-pass")
     monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setattr(
         trading_calendar_service,
-        "ensure_years",
-        lambda years: (_ for _ in ()).throw(RuntimeError("calendar unavailable"))
-        if years == [2026]
-        else None,
+        "ensure_months",
+        lambda keys: (_ for _ in ()).throw(RuntimeError("calendar unavailable")),
     )
     monkeypatch.setattr(scheduler_service, "start", lambda: None)
     monkeypatch.setattr(scheduler_service, "stop", lambda: None)
-    monkeypatch.setattr("app.main.date", type("FakeDate", (), {"today": staticmethod(lambda: type("Today", (), {"year": 2026})())}))
     get_settings.cache_clear()
     database_module._engine = None
     database_module._session_local = None
 
     app = create_app()
 
-    with pytest.raises(RuntimeError, match="calendar unavailable"):
-        with TestClient(app):
-            pass
+    # Warm-up failure is tolerated (warning logged), startup must succeed.
+    with TestClient(app):
+        pass
 
     database_module._engine = None
     database_module._session_local = None

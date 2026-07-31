@@ -9,9 +9,17 @@ import httpx
 
 _MAX_PROBE_DAYS = 30
 _CALENDAR_FETCH_RETRIES = 3
-_CALENDAR_SOURCE = "codebuddy_trade_cal"
-_CALENDAR_API_URL = "https://www.codebuddy.cn/v2/tool/financedata"
-_CALENDAR_EXCHANGE = "SSE"
+_CALENDAR_SOURCE = "szse_trade_cal"
+_CALENDAR_API_URL = "https://www.szse.cn/api/report/exchange/onepersistenthour/monthList"
+_CALENDAR_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.szse.cn/",
+    "Accept": "application/json, text/plain, */*",
+}
 
 
 class TradingCalendarService:
@@ -21,6 +29,10 @@ class TradingCalendarService:
         )
         self._calendar: dict[str, object] | None = None
         self._year_days_cache: dict[int, set[str]] = {}
+        # Tracks the last calendar day on which a (year, month) was attempted
+        # via the remote API. Used to throttle retries to once per day when the
+        # remote returns no data (e.g. unannounced future month) or errors out.
+        self._month_last_attempt: dict[tuple[int, int], date] = {}
 
     def _load_calendar(self) -> dict[str, object]:
         if self._calendar is None:
@@ -56,38 +68,23 @@ class TradingCalendarService:
             encoding="utf-8",
         )
 
-    def _fetch_year(self, year: int) -> list[str]:
-        last_error: RuntimeError | None = None
-        for attempt in range(_CALENDAR_FETCH_RETRIES + 1):
-            try:
-                return self._fetch_year_once(year)
-            except RuntimeError as exc:
-                last_error = exc
-                if attempt == _CALENDAR_FETCH_RETRIES:
-                    raise RuntimeError(
-                        f"{exc}；已重试 {_CALENDAR_FETCH_RETRIES} 次仍失败"
-                    ) from exc
+    # ------------------------------------------------------------------
+    # Remote fetch (per-month from SZSE monthList endpoint).
+    # ------------------------------------------------------------------
 
-        raise RuntimeError(
-            f"missing trading calendar data for year {year}: {last_error}"
-        )
+    def _fetch_month_once(self, year: int, month: int) -> list[str]:
+        """Single logical attempt: GET one month from SZSE.
 
-    def _fetch_year_once(self, year: int) -> list[str]:
-        payload = {
-            "api_name": "trade_cal",
-            "params": {
-                "exchange": _CALENDAR_EXCHANGE,
-                "start_date": f"{year}0101",
-                "end_date": f"{year}1231",
-            },
-            "fields": "",
-        }
-
+        Returns the list of trading days (YYYY-MM-DD) for the month. An
+        unannounced month returns an empty list (success, not an error).
+        HTTP / JSON errors raise RuntimeError.
+        """
+        month_str = f"{year}-{month:02d}"
         try:
-            response = httpx.post(
+            response = httpx.get(
                 _CALENDAR_API_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
+                params={"month": month_str},
+                headers=_CALENDAR_HEADERS,
                 timeout=30.0,
             )
             response.raise_for_status()
@@ -108,94 +105,121 @@ class TradingCalendarService:
         if not isinstance(result, dict):
             raise RuntimeError("交易日历远程接口返回结构异常")
 
-        code = result.get("code")
-        if code != 0:
-            raise RuntimeError(
-                f"交易日历远程接口返回失败: {result.get('msg') or code}"
-            )
-
         data = result.get("data")
-        if not isinstance(data, dict):
+        if not isinstance(data, list):
             raise RuntimeError("交易日历远程接口缺少 data 字段")
 
-        items = data.get("items")
-        if not isinstance(items, list):
-            raise RuntimeError("交易日历远程接口缺少 items 字段")
-
-        fields = data.get("fields")
-        rows = self._normalize_rows(fields, items)
-        trading_days = [
-            self._normalize_calendar_date(str(row["cal_date"]))
-            for row in rows
-            if self._is_open_value(row.get("is_open"))
-        ]
-        unique_days = sorted(set(trading_days))
-        if not unique_days:
-            raise RuntimeError(f"missing trading calendar data for year {year}")
-        return unique_days
-
-    def _normalize_rows(
-        self, fields: Any, items: list[Any]
-    ) -> list[dict[str, Any]]:
-        if not isinstance(fields, list) or not all(
-            isinstance(field, str) for field in fields
-        ):
-            raise RuntimeError("交易日历远程接口 fields 字段异常")
-
-        rows: list[dict[str, Any]] = []
-        for item in items:
-            if isinstance(item, dict):
-                rows.append(item)
+        trading_days: list[str] = []
+        for item in data:
+            if not isinstance(item, dict):
                 continue
-            if isinstance(item, list) and len(item) == len(fields):
-                rows.append(dict(zip(fields, item)))
+            if str(item.get("jybz") or "").strip() != "1":
                 continue
-            raise RuntimeError("交易日历远程接口 items 字段异常")
-        return rows
+            day = str(item.get("jyrq") or "").strip()
+            if len(day) == 10 and day[4] == "-" and day[7] == "-":
+                trading_days.append(day)
+        return sorted(set(trading_days))
 
-    def _normalize_calendar_date(self, value: str) -> str:
-        text = value.strip()
-        if len(text) == 8 and text.isdigit():
-            return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
-        if len(text) == 10 and text[4] == "-" and text[7] == "-":
-            return text
-        raise RuntimeError(f"交易日历远程接口返回了非法日期: {value}")
+    def _fetch_month(self, year: int, month: int) -> list[str]:
+        """Retry transient errors up to ``_CALENDAR_FETCH_RETRIES`` times.
 
-    def _is_open_value(self, value: Any) -> bool:
-        return str(value).strip() == "1"
+        Empty data (unannounced month) is a success and is not retried.
+        """
+        last_error: RuntimeError | None = None
+        for attempt in range(_CALENDAR_FETCH_RETRIES + 1):
+            try:
+                return self._fetch_month_once(year, month)
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt == _CALENDAR_FETCH_RETRIES:
+                    raise RuntimeError(
+                        f"{exc}；已重试 {_CALENDAR_FETCH_RETRIES} 次仍失败"
+                    ) from exc
 
-    def ensure_years(self, years: list[int]) -> None:
+        raise RuntimeError(
+            f"missing trading calendar data for {year}-{month:02d}: {last_error}"
+        )
+
+    # ------------------------------------------------------------------
+    # Cache merge & ensure.
+    # ------------------------------------------------------------------
+
+    def _merge_month(self, year: int, new_days: list[str]) -> None:
         calendar = self._load_calendar()
         years_data = calendar.setdefault("years", {})
         if not isinstance(years_data, dict):
             raise RuntimeError("交易日历缓存结构异常")
-        changed = False
-        for year in years:
-            key = str(year)
-            if key in years_data:
+        key = str(year)
+        year_payload = years_data.get(key)
+        if not isinstance(year_payload, dict):
+            year_payload = {}
+            years_data[key] = year_payload
+        existing = set(year_payload.get("trading_days") or [])
+        existing.update(str(d) for d in new_days)
+        year_payload["trading_days"] = sorted(existing)
+        calendar["source"] = _CALENDAR_SOURCE
+        self._save_calendar()
+        self._year_days_cache.pop(year, None)
+
+    def _month_has_data(self, year: int, month: int) -> bool:
+        """True if the cache already holds any trading day for this month."""
+        days = self._year_days(year)
+        prefix = f"{year}-{month:02d}-"
+        return any(d.startswith(prefix) for d in days)
+
+    def ensure_month(self, year: int, month: int) -> None:
+        """Ensure trading-day data for the given month is cached.
+
+        If the month already has cached data, do nothing. Otherwise fetch from
+        the remote API, but throttle retries to once per calendar day: if an
+        attempt failed or returned empty today, skip further attempts today
+        (the weekday fallback in ``is_trading_day`` keeps scheduling working).
+        """
+        if self._month_has_data(year, month):
+            return
+        today = date.today()
+        last = self._month_last_attempt.get((year, month))
+        if last == today:
+            return
+        try:
+            new_days = self._fetch_month(year, month)
+        except Exception:
+            self._month_last_attempt[(year, month)] = today
+            return
+        self._month_last_attempt[(year, month)] = today
+        if new_days:
+            self._merge_month(year, new_days)
+
+    def ensure_months(self, month_keys: list[str]) -> None:
+        for key in month_keys:
+            parts = str(key).split("-")
+            if len(parts) != 2:
                 continue
-            queried_days = self._fetch_year(year)
-            if not queried_days:
-                raise RuntimeError(f"missing trading calendar data for year {year}")
-            years_data[key] = {"trading_days": queried_days}
-            changed = True
-        if changed:
-            calendar["source"] = _CALENDAR_SOURCE
-            self._save_calendar()
-            self._year_days_cache.clear()
+            try:
+                year = int(parts[0])
+                month = int(parts[1])
+            except ValueError:
+                continue
+            if not (1 <= month <= 12):
+                continue
+            self.ensure_month(year, month)
+
+    # Compatibility shims for older callers/tests that monkeypatch or invoke
+    # ensure_years/warm_up_years. New code uses ensure_month/ensure_months.
+    def ensure_years(self, years: list[int]) -> None:
+        for year in years:
+            for month in range(1, 13):
+                self.ensure_month(year, month)
 
     def warm_up_years(self, current_year: int) -> None:
-        self.ensure_years([current_year])
-        try:
-            self.ensure_years([current_year + 1])
-        except Exception:
-            # Missing next-year data should not block current-year scheduling.
-            pass
+        today = date.today()
+        self.ensure_month(today.year, today.month)
+        next_month_date = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+        self.ensure_month(next_month_date.year, next_month_date.month)
 
     def _year_days(self, year: int) -> set[str]:
         if year in self._year_days_cache:
             return self._year_days_cache[year]
-        self.ensure_years([year])
         calendar = self._load_calendar()
         years_data = calendar.get("years", {})
         year_payload = (
@@ -210,7 +234,17 @@ class TradingCalendarService:
         return result
 
     def is_trading_day(self, current: date) -> bool:
-        return current.isoformat() in self._year_days(current.year)
+        self.ensure_month(current.year, current.month)
+        days = self._year_days(current.year)
+        if current.isoformat() in days:
+            return True
+        # The day is not in cached real data. If the month has any real data,
+        # this day is a genuine non-trading day. Otherwise (remote returned no
+        # data for this month / fetch failed) fall back to weekday check so
+        # scheduling is never blocked by missing calendar data.
+        if self._month_has_data(current.year, current.month):
+            return False
+        return current.weekday() < 5
 
     def next_trading_day(self, current: date) -> date:
         probe = current

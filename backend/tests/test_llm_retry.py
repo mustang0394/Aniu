@@ -159,35 +159,6 @@ def _patch_no_sleep(monkeypatch) -> None:
     )
 
 
-def test_agent_loop_with_retry_analysis_no_tools_retries_then_fails(monkeypatch) -> None:
-    from app.services.llm_service import LLMService
-
-    service = LLMService()
-    calls = {"n": 0}
-
-    def fake_agent_loop(**kwargs):
-        del kwargs
-        calls["n"] += 1
-        return _make_result(final_answer="分析结论", tool_history=[])
-
-    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
-    _patch_no_sleep(monkeypatch)
-
-    with pytest.raises(Exception):
-        service._run_agent_loop_with_retry(
-            model="demo",
-            base_url="https://example.com/v1",
-            api_key="token",
-            initial_messages=[{"role": "user", "content": "hi"}],
-            run_type="analysis",
-            timeout_seconds=5,
-            tool_executor=lambda *_a, **_k: {},
-            max_retries=2,
-        )
-    # 1 initial + 2 retries = 3 whole-round attempts.
-    assert calls["n"] == 3
-
-
 def test_agent_loop_with_retry_analysis_with_tools_succeeds(monkeypatch) -> None:
     from app.services.llm_service import LLMService
 
@@ -219,7 +190,8 @@ def test_agent_loop_with_retry_analysis_with_tools_succeeds(monkeypatch) -> None
     assert result["tool_history"]
 
 
-def test_agent_loop_with_retry_trade_no_tools_retries(monkeypatch) -> None:
+def test_agent_loop_with_retry_analysis_empty_retries(monkeypatch) -> None:
+    """analysis + empty content → retried (empty-content retry is cross-mode)."""
     from app.services.llm_service import LLMService
 
     service = LLMService()
@@ -228,7 +200,40 @@ def test_agent_loop_with_retry_trade_no_tools_retries(monkeypatch) -> None:
     def fake_agent_loop(**kwargs):
         del kwargs
         calls["n"] += 1
-        return _make_result(final_answer="建议买入", tool_history=[])
+        return _make_result(
+            final_answer="",
+            tool_history=[{"name": "mx_quote", "arguments": {}, "result": {"ok": True}}],
+        )
+
+    monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
+    _patch_no_sleep(monkeypatch)
+
+    with pytest.raises(Exception):
+        service._run_agent_loop_with_retry(
+            model="demo",
+            base_url="https://example.com/v1",
+            api_key="token",
+            initial_messages=[{"role": "user", "content": "hi"}],
+            run_type="analysis",
+            timeout_seconds=5,
+            tool_executor=lambda *_a, **_k: {},
+            max_retries=2,
+        )
+    # Empty content is retried regardless of tool_history.
+    assert calls["n"] == 3
+
+
+def test_agent_loop_with_retry_trade_empty_retries(monkeypatch) -> None:
+    """trade + empty content → retried (empty-content retry is cross-mode)."""
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    calls = {"n": 0}
+
+    def fake_agent_loop(**kwargs):
+        del kwargs
+        calls["n"] += 1
+        return _make_result(final_answer="", tool_history=[])
 
     monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
     _patch_no_sleep(monkeypatch)
@@ -393,7 +398,7 @@ def test_agent_loop_with_retry_cancel_not_retried(monkeypatch) -> None:
 
 
 def test_agent_loop_with_retry_retries_then_succeeds(monkeypatch) -> None:
-    """First round invalid (analysis, no tools) then second round valid."""
+    """First round invalid (empty content) then second round valid (non-empty)."""
     from app.services.llm_service import LLMService
 
     service = LLMService()
@@ -404,7 +409,7 @@ def test_agent_loop_with_retry_retries_then_succeeds(monkeypatch) -> None:
         del kwargs
         calls["n"] += 1
         if calls["n"] < 2:
-            return _make_result(final_answer="分析结论", tool_history=[])
+            return _make_result(final_answer="", tool_history=[])
         return _make_result(
             final_answer="分析结论",
             tool_history=[{"name": "mx_quote", "arguments": {}, "result": {"ok": True}}],
@@ -435,7 +440,8 @@ def test_agent_loop_with_retry_retries_then_succeeds(monkeypatch) -> None:
 
 
 def test_agent_loop_with_retry_max_retries_zero(monkeypatch) -> None:
-    from app.services.llm_service import LLMService
+    """max_retries=0 → single attempt; exception path raises immediately."""
+    from app.services.llm_service import LLMService, LLMUpstreamError
 
     service = LLMService()
     calls = {"n": 0}
@@ -443,12 +449,12 @@ def test_agent_loop_with_retry_max_retries_zero(monkeypatch) -> None:
     def fake_agent_loop(**kwargs):
         del kwargs
         calls["n"] += 1
-        return _make_result(final_answer="分析结论", tool_history=[])
+        raise LLMUpstreamError("5xx", status_code=503)
 
     monkeypatch.setattr(service, "_agent_loop", fake_agent_loop)
     _patch_no_sleep(monkeypatch)
 
-    with pytest.raises(Exception):
+    with pytest.raises(LLMUpstreamError):
         service._run_agent_loop_with_retry(
             model="demo",
             base_url="https://example.com/v1",
@@ -460,6 +466,165 @@ def test_agent_loop_with_retry_max_retries_zero(monkeypatch) -> None:
             max_retries=0,
         )
     assert calls["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# tool_choice policy: analysis/trade first round "required", then "auto";
+# chat always "auto".
+# ---------------------------------------------------------------------------
+
+
+def test_agent_loop_tool_choice_required_first_round_analysis(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    seen: list[dict[str, object]] = []
+    calls = {"n": 0}
+
+    def fake_call_llm_stream(*, payload, **kwargs):
+        del kwargs
+        calls["n"] += 1
+        seen.append(dict(payload))
+        if calls["n"] == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {"name": "mx_quote", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "stream_meta": {"final_streamed": True},
+            }
+        return {
+            "choices": [{"message": {"content": "分析结论", "tool_calls": []}}],
+            "stream_meta": {"final_streamed": True},
+        }
+
+    monkeypatch.setattr(service, "_call_llm_stream", fake_call_llm_stream)
+    service._agent_loop(
+        model="demo-model",
+        base_url="https://example.com/v1",
+        api_key="token",
+        initial_messages=[{"role": "user", "content": "hi"}],
+        run_type="analysis",
+        timeout_seconds=5,
+        tool_executor=lambda *_a, **_k: {"ok": True, "summary": "ok", "result": {}},
+    )
+    assert seen[0]["tool_choice"] == "required"
+    assert seen[1]["tool_choice"] == "auto"
+
+
+def test_agent_loop_tool_choice_required_first_round_trade(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    seen: list[dict[str, object]] = []
+    calls = {"n": 0}
+
+    def fake_call_llm_stream(*, payload, **kwargs):
+        del kwargs
+        calls["n"] += 1
+        seen.append(dict(payload))
+        if calls["n"] == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {"name": "mx_quote", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "stream_meta": {"final_streamed": True},
+            }
+        return {
+            "choices": [{"message": {"content": "交易结论", "tool_calls": []}}],
+            "stream_meta": {"final_streamed": True},
+        }
+
+    monkeypatch.setattr(service, "_call_llm_stream", fake_call_llm_stream)
+    service._agent_loop(
+        model="demo-model",
+        base_url="https://example.com/v1",
+        api_key="token",
+        initial_messages=[{"role": "user", "content": "hi"}],
+        run_type="trade",
+        timeout_seconds=5,
+        tool_executor=lambda *_a, **_k: {"ok": True, "summary": "ok", "result": {}},
+    )
+    assert seen[0]["tool_choice"] == "required"
+    assert seen[1]["tool_choice"] == "auto"
+
+
+def test_agent_loop_tool_choice_auto_for_chat(monkeypatch) -> None:
+    from app.services.llm_service import LLMService
+
+    service = LLMService()
+    seen: list[dict[str, object]] = []
+
+    def fake_call_llm_stream(*, payload, **kwargs):
+        del kwargs
+        seen.append(dict(payload))
+        return {
+            "choices": [{"message": {"content": "纯文字回答", "tool_calls": []}}],
+            "stream_meta": {"final_streamed": True},
+        }
+
+    monkeypatch.setattr(service, "_call_llm_stream", fake_call_llm_stream)
+    service._agent_loop(
+        model="demo-model",
+        base_url="https://example.com/v1",
+        api_key="token",
+        initial_messages=[{"role": "user", "content": "hi"}],
+        run_type="chat",
+        timeout_seconds=5,
+        tool_executor=lambda *_a, **_k: {"ok": True, "summary": "ok", "result": {}},
+    )
+    assert seen[0]["tool_choice"] == "auto"
+
+
+# ---------------------------------------------------------------------------
+# System prompt enforcement: analysis/trade carry a "must query first" rule;
+# chat does not.
+# ---------------------------------------------------------------------------
+
+
+def test_augment_system_prompt_analysis_has_enforcement() -> None:
+    from app.services.llm_service import LLMService
+
+    prompt = LLMService._augment_system_prompt("base", run_type="analysis")
+    assert "严禁在零工具调用" in prompt
+    assert "数据获取强制规则" in prompt
+
+
+def test_augment_system_prompt_trade_has_enforcement() -> None:
+    from app.services.llm_service import LLMService
+
+    prompt = LLMService._augment_system_prompt("base", run_type="trade")
+    assert "必须先调用" in prompt
+    assert "应优先选择" in prompt
+
+
+def test_augment_system_prompt_chat_has_no_query_enforcement() -> None:
+    from app.services.llm_service import LLMService
+
+    prompt = LLMService._augment_system_prompt("base", run_type="chat")
+    assert "严禁在零工具调用" not in prompt
+    assert "数据获取强制规则" not in prompt
 
 
 # ---------------------------------------------------------------------------

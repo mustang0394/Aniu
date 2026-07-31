@@ -40,9 +40,21 @@ _TRADE_ENFORCEMENT_PROMPT = (
     "1. 当你经过分析判断需要买入某只股票时，必须调用 mx_moni_trade 工具（action=\"BUY\"）\n"
     "2. 当你经过分析判断需要卖出某只股票时，必须调用 mx_moni_trade 工具（action=\"SELL\"）\n"
     "3. 当你经过分析判断需要撤单时，必须调用 mx_moni_cancel 工具\n"
-    "4. 仅当你判断应该继续持有、不做任何操作时，才可以直接输出文本分析结论而不调用交易工具\n"
+    "4. 即使你判断应该继续持有、不做任何交易操作，也必须先调用 mx_query_market / "
+    "mx_search_news / mx_get_positions / mx_get_balance 等查询类工具确认当前行情、资讯、"
+    "持仓与资金状态，再给出结论。严禁在零工具调用的前提下直接输出任何分析或交易结论。\n"
     "5. 在文本中说「建议买入」「应该卖出」「可以建仓」等不会触发任何实际操作"
-    "——只有工具调用才会执行交易。如果你不调用函数，交易就不会发生。"
+    "——只有工具调用才会执行交易。如果你不调用函数，交易就不会发生。\n"
+    "6. 第一轮被强制要求调用工具时，应优先选择查询类工具；不得在未获取最新行情、持仓、资金数据前"
+    "直接调用 mx_moni_trade / mx_moni_cancel。"
+)
+_ANALYSIS_ENFORCEMENT_PROMPT = (
+    "## 数据获取强制规则（analysis 模式专属）\n"
+    "你当前处于分析（analysis）模式，你的分析结论必须建立在真实数据之上。\n"
+    "关键规则：\n"
+    "1. 必须先调用查询类工具，获取最新行情、资讯、持仓与资金数据，再给出分析结论。\n"
+    "2. 严禁在零工具调用的前提下直接输出分析结论。\n"
+    "3. 第一轮被强制要求调用工具时，应优先选择上述查询类工具。"
 )
 
 
@@ -51,11 +63,12 @@ class LLMStreamCancelled(RuntimeError):
 
 
 class LLMEmptyResultError(Exception):
-    """Raised when an agent loop completes but yields an invalid result.
+    """Raised when an agent loop completes but yields an empty answer.
 
     Used internally by ``_run_agent_loop_with_retry`` to signal that the whole
-    attempt should be retried (e.g. empty content, or analysis/trade run with
-    no tool calls). It is raised and caught within ``llm_service`` only.
+    attempt should be retried because the model returned empty content
+    (covers chat/analysis/trade). It is raised and caught within
+    ``llm_service`` only.
     """
 
 
@@ -457,6 +470,8 @@ class LLMService:
         ]
         if str(run_type or "").strip() == "trade":
             prompt_parts.append(_TRADE_ENFORCEMENT_PROMPT)
+        if str(run_type or "").strip() == "analysis":
+            prompt_parts.append(_ANALYSIS_ENFORCEMENT_PROMPT)
         if str(run_type or "").strip() == "chat":
             prompt_parts.append(_CHAT_CONFIRMATION_APPEND_PROMPT)
         return "\n\n".join(part for part in prompt_parts if part)
@@ -563,13 +578,17 @@ class LLMService:
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
             _raise_if_cancelled(cancel_event)
+            forced_first_round = iteration == 0 and str(run_type or "").strip() in {
+                "analysis",
+                "trade",
+            }
             iteration_payload = self._apply_reasoning_effort(
                 {
                     "model": model,
                     "temperature": _LLM_TEMPERATURE,
                     "messages": messages,
                     "tools": skill_registry.build_tools(run_type=run_type),
-                    "tool_choice": "auto",
+                    "tool_choice": "required" if forced_first_round else "auto",
                 },
                 normalized_effort,
             )
@@ -725,15 +744,8 @@ class LLMService:
                     max_retries=normalized_retries,
                 )
                 raw_answer = str(result.get("raw_final_answer") or "").strip()
-                tool_history = result.get("tool_history") or []
-                if str(run_type or "").strip() in {"analysis", "trade"}:
-                    if not tool_history:
-                        raise LLMEmptyResultError(
-                            "analysis/trade 整轮未调用任何工具，视为无效。"
-                        )
-                else:  # chat
-                    if not raw_answer:
-                        raise LLMEmptyResultError("聊天模式返回空内容，视为无效。")
+                if not raw_answer:
+                    raise LLMEmptyResultError("大模型返回空内容，视为无效。")
                 return result
             except LLMStreamCancelled:
                 raise

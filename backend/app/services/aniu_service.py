@@ -229,8 +229,8 @@ class AniuService:
             return ("analysis", task_prompt)
         return (
             "analysis",
-            "请先分析当前情况，必要时自行调用妙想工具获取数据，并在需要时执行模拟交易。"
-            "最后用自然语言总结本次判断、依据和操作结果。",
+            "请先调用妙想工具获取最新行情、资讯、持仓与资金数据，基于数据给出分析结论，"
+            "并在需要时执行模拟交易。最后用自然语言总结本次判断、依据和操作结果。",
         )
 
     def _run_agent_supports_emit(self, run_agent: Any) -> bool:

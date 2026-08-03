@@ -121,11 +121,35 @@ def _is_business_failure_status(value: Any) -> bool:
     )
 
 
+# Known Miaoxiang/business failure codes. Success responses often carry
+# ``code`` values such as 0, 200, "200" or omit it entirely; only treat the
+# explicitly documented failure codes (rate limit, business error, negative)
+# as failures so real ``mx_get_positions``/``mx_get_balance`` payloads are not
+# misclassified as freshness failures.
+_BUSINESS_FAILURE_CODE_VALUES: frozenset[Any] = frozenset(
+    {113, -1, -113, "113", "-1", "-113"}
+)
+
+
 def _is_business_failure_code(value: Any) -> bool:
-    if isinstance(value, str):
-        return bool(value.strip())
+    if isinstance(value, bool):
+        return False
     if isinstance(value, (int, float)):
-        return value != 0
+        if value < 0:
+            return True
+        if value in _BUSINESS_FAILURE_CODE_VALUES:
+            return True
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized or normalized in {"0", "200", "ok", "success"}:
+            return False
+        if normalized in {"113", "-1", "-113"}:
+            return True
+        return any(
+            fragment in normalized
+            for fragment in ("error", "fail", "失败", "错误", "限流", "调用次数已达上限")
+        )
     return False
 
 

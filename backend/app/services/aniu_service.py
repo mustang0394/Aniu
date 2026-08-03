@@ -34,7 +34,12 @@ from app.schemas.aniu import AppSettingsUpdate, ChatRequest, ScheduleUpdate
 from app.schemas.aniu import ChatMessageRead, PersistentSessionRead
 from app.skills.providers import build_skill_context
 from app.services.event_bus import event_bus, make_emitter
-from app.services.llm_service import LLMStreamCancelled, llm_service
+from app.services.llm_service import (
+    LLMFreshnessError,
+    LLMMutationSafetyError,
+    LLMStreamCancelled,
+    llm_service,
+)
 from app.services.token_estimator import estimate_messages_tokens, estimate_text_tokens
 from app.services.trading_calendar_service import trading_calendar_service
 from skills.mx_core.client import MXClient
@@ -1867,8 +1872,13 @@ class AniuService:
                 "llm_model": settings.llm_model,
                 "run_type": schedule.run_type if schedule else manual_resolved_run_type,
                 "schedule_id": schedule.id if schedule else None,
+                "schedule_name": schedule.name
+                if schedule
+                else getattr(settings, "schedule_name", None),
                 "system_prompt": settings.system_prompt,
                 "task_prompt": schedule.task_prompt if schedule else manual_task_prompt,
+                "market_query": getattr(settings, "market_query", None),
+                "news_query": getattr(settings, "news_query", None),
                 "timeout_seconds": int(
                     schedule.timeout_seconds if schedule else 1800
                 ),
@@ -1981,8 +1991,12 @@ class AniuService:
                 client.close()
 
             tool_calls = decision.get("tool_calls")
+            prefetched_tool_calls = decision.get("prefetched_tool_calls")
+            prefetched_freshness = decision.get("freshness")
             skill_payloads = {
                 "tool_calls": tool_calls,
+                "prefetched_tool_calls": prefetched_tool_calls,
+                "prefetched_freshness": prefetched_freshness,
                 "runtime_trace": runtime_trace,
             }
             executed_actions = self._extract_executed_actions(tool_calls)
@@ -2194,6 +2208,10 @@ class AniuService:
                 )
                 return run
         except Exception as exc:
+            fail_closed_error = isinstance(
+                exc,
+                (LLMFreshnessError, LLMMutationSafetyError),
+            )
             logger.error(
                 "execute_run failed: run_id=%s, error=%s",
                 run_id,
@@ -2223,6 +2241,21 @@ class AniuService:
                     run.error_message = str(exc)
                     run.final_answer = None
                     run.finished_at = now_utc()
+                    if hasattr(exc, "prefetched_tool_calls") or hasattr(
+                        exc, "freshness"
+                    ):
+                        failure_skill_payloads = (
+                            dict(run.skill_payloads)
+                            if isinstance(run.skill_payloads, dict)
+                            else {}
+                        )
+                        failure_skill_payloads["prefetched_tool_calls"] = getattr(
+                            exc, "prefetched_tool_calls", None
+                        )
+                        failure_skill_payloads["prefetched_freshness"] = getattr(
+                            exc, "freshness", None
+                        )
+                        run.skill_payloads = failure_skill_payloads
                     db.add(run)
                     if session_context is not None:
                         session = db.get(ChatSession, session_context.session_id)
@@ -2264,7 +2297,17 @@ class AniuService:
                         )
                         if trigger_source == "schedule":
                             retry_count = max(int(schedule.retry_count or 0), 0)
-                            if retry_count < SCHEDULE_MAX_RETRIES:
+                            if fail_closed_error:
+                                schedule.retry_count = retry_count
+                                schedule.retry_after_at = None
+                                logger.warning(
+                                    "schedule run fail-closed without retry: "
+                                    "run_id=%s, schedule_id=%s, error_type=%s",
+                                    run_id,
+                                    schedule_id,
+                                    type(exc).__name__,
+                                )
+                            elif retry_count < SCHEDULE_MAX_RETRIES:
                                 schedule.retry_count = retry_count + 1
                                 schedule.retry_after_at = now_utc() + SCHEDULE_RETRY_DELAY
                             else:
@@ -2660,6 +2703,11 @@ class AniuService:
             f"来源: {trigger_source_text}",
             f"任务类型: {task_type_text}",
             "",
+            (
+                "上下文边界：历史只用于策略连续性；历史行情、资讯、持仓、资金、"
+                "委托全部过期，本轮必须依据[本轮实时数据快照]或本轮成功查询。"
+            ),
+            "",
             "本轮任务:",
             str(task_prompt or "").strip() or "--",
         ]
@@ -2888,7 +2936,14 @@ class AniuService:
         archived_summary = str(session.archived_summary or "").strip()
         if not archived_summary:
             return None
-        return {"role": "system", "content": "[上下文压缩摘要]\n" + archived_summary}
+        return {
+            "role": "system",
+            "content": (
+                "[上下文压缩摘要（历史策略记忆，行情/资讯/持仓/资金/委托均已过期，"
+                "不是本轮事实）]\n"
+                + archived_summary
+            ),
+        }
 
     def _build_persistent_session_prompt_messages(
         self,
@@ -2917,8 +2972,8 @@ class AniuService:
             return None
         recent = assistant_records[-6:]
         lines = [
-            "## 当前策略",
-            "- 结合最近自动化运行的结论、失败记录和账户快照继续决策。",
+            "## 历史策略记忆（不是本轮事实）",
+            "- 仅用于延续最近自动化运行的策略、结论和失败记录。",
             "## 已执行动作",
         ]
         for record in recent:
@@ -2930,9 +2985,10 @@ class AniuService:
             [
                 "## 当前约束",
                 "- 原始运行记录和交易记录以 StrategyRun / TradeOrder 为准。",
-                "- 账户实时数字应以本轮最新快照和工具结果为准。",
+                "- 历史行情、资讯、持仓、资金和委托均不是本轮实时事实。",
+                "- 本轮账户数字必须以实时快照或本轮成功查询结果为准。",
                 "## 后续计划",
-                "- 下一轮结合最新账户快照，延续、调整或推翻之前计划。",
+                "- 下一轮获取实时证据后，再延续、调整或推翻历史计划。",
             ]
         )
         return "\n".join(lines)

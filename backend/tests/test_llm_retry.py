@@ -518,7 +518,7 @@ def test_agent_loop_tool_choice_required_first_round_analysis(monkeypatch) -> No
         timeout_seconds=5,
         tool_executor=lambda *_a, **_k: {"ok": True, "summary": "ok", "result": {}},
     )
-    assert seen[0]["tool_choice"] == "required"
+    assert seen[0]["tool_choice"] == "auto"
     assert seen[1]["tool_choice"] == "auto"
 
 
@@ -566,7 +566,7 @@ def test_agent_loop_tool_choice_required_first_round_trade(monkeypatch) -> None:
         timeout_seconds=5,
         tool_executor=lambda *_a, **_k: {"ok": True, "summary": "ok", "result": {}},
     )
-    assert seen[0]["tool_choice"] == "required"
+    assert seen[0]["tool_choice"] == "auto"
     assert seen[1]["tool_choice"] == "auto"
 
 

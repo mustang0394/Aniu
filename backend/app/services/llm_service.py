@@ -5,6 +5,8 @@ import logging
 import random
 import threading
 import time
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 
 import httpx
@@ -15,6 +17,11 @@ from skills.mx_core.capital_seal import build_capital_seal_prompt
 from skills.mx_core.markets import (
     build_allowed_markets_prompt,
     get_allowed_markets_from_settings,
+)
+from skills.mx_core.tool_specs import (
+    MARKET_QUERY_TOOL_NAMES,
+    MUTATION_TOOL_NAMES,
+    QUERY_TOOL_NAMES,
 )
 from app.skills import skill_registry
 
@@ -27,6 +34,10 @@ _DEFAULT_LLM_MAX_RETRIES = 3
 _LLM_RETRY_BASE_SECONDS = 1.0
 _LLM_RETRY_MAX_SECONDS = 20.0
 _LLM_RETRY_CANCEL_POLL_SECONDS = 0.2
+_MAX_FRESHNESS_CORRECTIONS = 2
+_PREFETCH_TOOL_RESULT_CHAR_LIMIT = 3000
+_PREFETCH_SNAPSHOT_CHAR_LIMIT = 12000
+_SHANGHAI_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
 _CHAT_CONFIRMATION_APPEND_PROMPT = (
     "聊天专用安全规则：当操作涉及交易执行、下单、撤单、自选股增删、写入、删除、覆盖、"
     "批量修改或其他会改变数据、文件、配置、状态的破坏性操作时，你必须先明确说明拟执行操作、"
@@ -41,21 +52,328 @@ _TRADE_ENFORCEMENT_PROMPT = (
     "2. 当你经过分析判断需要卖出某只股票时，必须调用 mx_moni_trade 工具（action=\"SELL\"）\n"
     "3. 当你经过分析判断需要撤单时，必须调用 mx_moni_cancel 工具\n"
     "4. 即使你判断应该继续持有、不做任何交易操作，也必须先调用 mx_query_market / "
-    "mx_search_news / mx_get_positions / mx_get_balance 等查询类工具确认当前行情、资讯、"
-    "持仓与资金状态，再给出结论。严禁在零工具调用的前提下直接输出任何分析或交易结论。\n"
+    "mx_search_news / mx_get_positions / mx_get_balance 等查询类工具，或确认系统提供的"
+    "[本轮实时数据快照]已成功包含市场、持仓与资金证据，再给出结论。快照失败项必须补查。\n"
     "5. 在文本中说「建议买入」「应该卖出」「可以建仓」等不会触发任何实际操作"
     "——只有工具调用才会执行交易。如果你不调用函数，交易就不会发生。\n"
-    "6. 第一轮被强制要求调用工具时，应优先选择查询类工具；不得在未获取最新行情、持仓、资金数据前"
-    "直接调用 mx_moni_trade / mx_moni_cancel。"
+    "6. 当系统实时快照未齐备而当前仅提供查询工具时，应优先选择查询类工具；不得在未获取"
+    "最新行情、持仓、资金数据前直接调用 mx_moni_trade / mx_moni_cancel。"
 )
 _ANALYSIS_ENFORCEMENT_PROMPT = (
     "## 数据获取强制规则（analysis 模式专属）\n"
     "你当前处于分析（analysis）模式，你的分析结论必须建立在真实数据之上。\n"
     "关键规则：\n"
-    "1. 必须先调用查询类工具，获取最新行情、资讯、持仓与资金数据，再给出分析结论。\n"
-    "2. 严禁在零工具调用的前提下直接输出分析结论。\n"
-    "3. 第一轮被强制要求调用工具时，应优先选择上述查询类工具。"
+    "1. 必须先调用查询类工具，或确认系统提供的[本轮实时数据快照]已成功获取最新行情、"
+    "资讯、持仓与资金数据，再给出分析结论。\n"
+    "2. 严禁在零工具调用且无成功系统预取的前提下直接输出分析结论。\n"
+    "3. 当实时快照缺失或失败时，应优先选择当前可见的查询类工具补齐。"
 )
+
+
+_BUSINESS_ERROR_KEYS = frozenset(
+    {"error", "errors", "errmsg", "error_msg", "errormsg", "error_message"}
+)
+_BUSINESS_STATUS_KEYS = frozenset({"status", "state", "状态"})
+_BUSINESS_NESTED_KEYS = frozenset(
+    {"data", "result", "response", "payload", "body", "rows", "items", "records"}
+)
+_BUSINESS_ROW_CONTAINER_KEYS = frozenset({"rows", "items", "records"})
+_BUSINESS_FAILURE_STATUSES = frozenset(
+    {"error", "failed", "fail", "failure", "失败", "错误"}
+)
+_BUSINESS_FAILURE_MESSAGE_FRAGMENTS = (
+    "调用次数已达上限",
+    "限流",
+    "失败",
+    "错误",
+)
+
+
+def _has_meaningful_failure_value(value: Any) -> bool:
+    if value is None or value is False:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized not in {"", "0", "false", "none", "null", "ok", "success"}
+    return bool(value)
+
+
+def _is_explicit_false(value: Any) -> bool:
+    if value is False:
+        return True
+    if isinstance(value, (int, float)):
+        return value == 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"0", "false", "no", "失败"}
+    return False
+
+
+def _is_business_failure_status(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    if normalized in _BUSINESS_FAILURE_STATUSES:
+        return True
+    return (
+        normalized.startswith(("error:", "error_", "failed:", "failed_"))
+        or "失败" in normalized
+        or "错误" in normalized
+    )
+
+
+def _is_business_failure_code(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
+def _contains_business_failure(
+    value: Any,
+    *,
+    _check_response_metadata: bool = True,
+) -> bool:
+    """Inspect a result and its common envelope keys for explicit failures."""
+    if isinstance(value, list):
+        return any(
+            _contains_business_failure(
+                item,
+                _check_response_metadata=_check_response_metadata,
+            )
+            for item in value
+        )
+    if not isinstance(value, dict):
+        return False
+
+    for key, item in value.items():
+        normalized_key = str(key).strip().lower()
+        if (
+            normalized_key in _BUSINESS_ERROR_KEYS
+            and _has_meaningful_failure_value(item)
+        ):
+            return True
+        if (
+            normalized_key in {"failed", "failure"}
+            and _has_meaningful_failure_value(item)
+        ):
+            return True
+        if normalized_key in {"ok", "success", "succeeded"} and _is_explicit_false(
+            item
+        ):
+            return True
+        if normalized_key in _BUSINESS_STATUS_KEYS and _is_business_failure_status(item):
+            return True
+        if (
+            _check_response_metadata
+            and normalized_key == "code"
+            and _is_business_failure_code(item)
+        ):
+            return True
+        if _check_response_metadata and normalized_key in {"msg", "message"}:
+            message = str(item or "").strip()
+            if any(fragment in message for fragment in _BUSINESS_FAILURE_MESSAGE_FRAGMENTS):
+                return True
+
+    for key, item in value.items():
+        normalized_key = str(key).strip().lower()
+        if normalized_key not in _BUSINESS_NESTED_KEYS:
+            continue
+        if _contains_business_failure(
+            item,
+            _check_response_metadata=(
+                _check_response_metadata
+                and normalized_key not in _BUSINESS_ROW_CONTAINER_KEYS
+            ),
+        ):
+            return True
+    return False
+
+
+@dataclass
+class FreshnessTracker:
+    """Track current-run evidence and whether mutation replay is unsafe."""
+
+    run_type: str
+    successful_query_tools: set[str] = field(default_factory=set)
+    failed_query_tools: set[str] = field(default_factory=set)
+    prefetched_tool_names: set[str] = field(default_factory=set)
+    prefetched_successful_query_tools: set[str] = field(default_factory=set)
+    prefetched_failed_query_tools: set[str] = field(default_factory=set)
+    mutations_executed: list[str] = field(default_factory=list)
+    correction_attempts: int = 0
+    captured_at: str = ""
+    requires_orders: bool = False
+
+    def __post_init__(self) -> None:
+        self.run_type = str(self.run_type or "").strip()
+        self.prefetched_successful_query_tools.update(self.successful_query_tools)
+        self.prefetched_failed_query_tools.update(self.failed_query_tools)
+
+    @staticmethod
+    def _is_business_success(tool_result: Any) -> bool:
+        if not isinstance(tool_result, dict) or tool_result.get("ok") is not True:
+            return False
+        result = tool_result.get("result")
+        if not isinstance(result, dict) or not result:
+            return False
+        return not _contains_business_failure(result)
+
+    def record_prefetched_tool_result(
+        self, tool_name: str, tool_result: Any
+    ) -> None:
+        self.prefetched_tool_names.add(tool_name)
+        if tool_name not in QUERY_TOOL_NAMES:
+            return
+        if self._is_business_success(tool_result):
+            self.successful_query_tools.add(tool_name)
+            self.prefetched_successful_query_tools.add(tool_name)
+            self.failed_query_tools.discard(tool_name)
+            self.prefetched_failed_query_tools.discard(tool_name)
+        else:
+            self.failed_query_tools.add(tool_name)
+            self.prefetched_failed_query_tools.add(tool_name)
+
+    def seed_from_prefetch(self, tool_calls: Iterable[Any]) -> None:
+        for item in tool_calls:
+            if not isinstance(item, dict):
+                continue
+            tool_name = str(item.get("name") or "").strip()
+            if not tool_name:
+                continue
+            self.record_prefetched_tool_result(tool_name, item.get("result"))
+
+    def record_tool_result(self, tool_name: str, tool_result: Any) -> None:
+        if tool_name in QUERY_TOOL_NAMES:
+            if self._is_business_success(tool_result):
+                self.successful_query_tools.add(tool_name)
+                self.failed_query_tools.discard(tool_name)
+            else:
+                self.failed_query_tools.add(tool_name)
+        if (
+            isinstance(tool_result, dict)
+            and bool(tool_result.get("ok"))
+            and isinstance(tool_result.get("executed_action"), dict)
+        ):
+            self.mutations_executed.append(tool_name)
+
+    def reset_for_round_retry(self) -> None:
+        """Drop evidence omitted when retry replays only the initial messages."""
+        self.successful_query_tools = set(self.prefetched_successful_query_tools)
+        self.failed_query_tools = set(self.prefetched_failed_query_tools)
+        self.correction_attempts = 0
+
+    def missing_requirements(self) -> list[str]:
+        missing: list[str] = []
+        if not any(
+            name in self.successful_query_tools for name in MARKET_QUERY_TOOL_NAMES
+        ):
+            missing.append("实时行情或资讯")
+        if "mx_get_positions" not in self.successful_query_tools:
+            missing.append("当前持仓")
+        if "mx_get_balance" not in self.successful_query_tools:
+            missing.append("当前资金")
+        if self.requires_orders and "mx_get_orders" not in self.successful_query_tools:
+            missing.append("当前委托")
+        return missing
+
+    def is_ready(self) -> bool:
+        return not self.missing_requirements()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_type": self.run_type,
+            "successful_query_tools": sorted(self.successful_query_tools),
+            "failed_query_tools": sorted(self.failed_query_tools),
+            "prefetched_tool_names": sorted(self.prefetched_tool_names),
+            "prefetched_successful_query_tools": sorted(
+                self.prefetched_successful_query_tools
+            ),
+            "prefetched_failed_query_tools": sorted(
+                self.prefetched_failed_query_tools
+            ),
+            "mutations_executed": list(self.mutations_executed),
+            "correction_attempts": self.correction_attempts,
+            "captured_at": self.captured_at,
+            "requires_orders": self.requires_orders,
+            "ready": self.is_ready(),
+            "missing_requirements": self.missing_requirements(),
+        }
+
+
+class _FinalEventBuffer:
+    """Buffer model text for analysis/trade until the iteration is accepted.
+
+    Final stream events are always held back.  While freshness is not ready,
+    ``llm_message`` is buffered as well so text accompanying a query request
+    cannot leak before the gate is satisfied.  ``flush`` emits buffered events;
+    ``discard`` drops them.
+    """
+
+    _FINAL_EVENTS = frozenset({"final_started", "final_delta", "final_finished"})
+
+    def __init__(
+        self,
+        inner_emit: Callable[..., Any],
+        *,
+        buffer_llm_messages: bool = False,
+    ) -> None:
+        self._inner = inner_emit
+        self._buffer_llm_messages = buffer_llm_messages
+        self._buffer: list[tuple[str, dict[str, Any]]] = []
+
+    def __call__(self, event_type: str, **data: Any) -> None:
+        should_buffer = event_type in self._FINAL_EVENTS or (
+            self._buffer_llm_messages and event_type == "llm_message"
+        )
+        if should_buffer:
+            self._buffer.append((event_type, data))
+        else:
+            self._inner(event_type, **data)
+
+    def flush(self) -> None:
+        for event_type, data in self._buffer:
+            self._inner(event_type, **data)
+        self._buffer.clear()
+
+    def discard(self) -> None:
+        self._buffer.clear()
+
+
+class LLMMutationSafetyError(RuntimeError):
+    """Raised when a mutation succeeded and the round must not be retried."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        mutations: list[str] | None = None,
+        freshness: dict[str, Any] | None = None,
+        prefetched_tool_calls: list[dict[str, Any]] | None = None,
+        partial_result: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.mutations = list(mutations or [])
+        self.freshness = dict(freshness or {})
+        self.prefetched_tool_calls = list(prefetched_tool_calls or [])
+        self.partial_result = partial_result
+
+
+class LLMFreshnessError(RuntimeError):
+    """Raised when current-run evidence cannot satisfy the freshness policy."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        prefetched_tool_calls: list[dict[str, Any]] | None = None,
+        freshness: dict[str, Any] | None = None,
+        missing_requirements: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.prefetched_tool_calls = list(prefetched_tool_calls or [])
+        self.freshness = dict(freshness or {})
+        self.missing_requirements = list(missing_requirements or [])
 
 
 class LLMStreamCancelled(RuntimeError):
@@ -251,6 +569,145 @@ def _slim_tool_result(tool_result: dict[str, Any]) -> dict[str, Any]:
         "tool_name": tool_result.get("tool_name"),
         "summary": tool_result.get("summary"),
         "result": tool_result.get("result"),
+    }
+
+
+def _tool_spec_name(tool: Any) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    function_payload = tool.get("function")
+    if not isinstance(function_payload, dict):
+        return ""
+    return str(function_payload.get("name") or "").strip()
+
+
+def _normalize_tool_result(tool_name: str, value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {
+        "ok": False,
+        "tool_name": tool_name,
+        "error": "工具返回了无法识别的结果格式。",
+        "summary": "工具返回了无法识别的结果格式。",
+        "result": None,
+    }
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    normalized = str(text or "")
+    normalized_limit = max(0, int(limit))
+    if len(normalized) <= normalized_limit:
+        return normalized
+    if normalized_limit == 0:
+        return ""
+    marker = "\n...[内容已截断]"
+    if len(marker) >= normalized_limit:
+        return marker[:normalized_limit]
+    return normalized[: normalized_limit - len(marker)] + marker
+
+
+def _json_for_snapshot(
+    value: Any, limit: int = _PREFETCH_TOOL_RESULT_CHAR_LIMIT
+) -> str:
+    try:
+        rendered = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    except (TypeError, ValueError):
+        rendered = str(value)
+    return _truncate_text(rendered, limit)
+
+
+def _requires_order_evidence(app_settings: Any, run_type: str) -> bool:
+    if str(run_type or "").strip() != "trade":
+        return False
+    task_text = " ".join(
+        [
+            str(getattr(app_settings, "task_prompt", "") or ""),
+            str(getattr(app_settings, "schedule_name", "") or ""),
+        ]
+    )
+    return any(keyword in task_text for keyword in ("撤单", "委托", "订单"))
+
+
+def _build_prefetch_snapshot(
+    tool_calls: list[dict[str, Any]], captured_at: datetime
+) -> str:
+    shanghai_time = captured_at.astimezone(_SHANGHAI_TZ)
+    header_lines = [
+        "[本轮实时数据快照]",
+        f"上海时间：{shanghai_time.isoformat(timespec='seconds')}",
+        f"UTC 时间：{captured_at.astimezone(timezone.utc).isoformat(timespec='seconds')}",
+        (
+            "数据边界：历史对话中的行情、资讯、持仓、资金和委托均已过期；"
+            "本轮只能依据此快照中的成功结果或随后本轮成功查询。"
+        ),
+    ]
+    entries: list[tuple[list[str], Any | None]] = []
+    for item in tool_calls:
+        tool_name = str(item.get("name") or "").strip() or "unknown"
+        tool_result = item.get("result")
+        succeeded = FreshnessTracker._is_business_success(tool_result)
+        entry_lines = [
+            "",
+            f"- {tool_name}：{'成功' if succeeded else '失败'}",
+            f"  参数：{_json_for_snapshot(item.get('arguments') or {}, 600)}",
+        ]
+        raw_result: Any | None = None
+        if succeeded and isinstance(tool_result, dict):
+            entry_lines.append("  成功原始结果：")
+            raw_result = tool_result.get("result")
+        else:
+            error_text = ""
+            if isinstance(tool_result, dict):
+                error_text = str(
+                    tool_result.get("error")
+                    or tool_result.get("summary")
+                    or "业务结果未通过成功校验"
+                ).strip()
+            entry_lines.append(
+                f"  失败原因：{_truncate_text(error_text or '工具调用失败', 600)}"
+            )
+        entries.append((entry_lines, raw_result))
+
+    metadata_lines = list(header_lines)
+    for entry_lines, _raw_result in entries:
+        metadata_lines.extend(entry_lines)
+    successful_count = sum(raw_result is not None for _lines, raw_result in entries)
+    metadata_length = len("\n".join(metadata_lines)) + successful_count
+    raw_result_limit = _PREFETCH_TOOL_RESULT_CHAR_LIMIT
+    if successful_count:
+        raw_result_limit = min(
+            raw_result_limit,
+            max(
+                0,
+                (_PREFETCH_SNAPSHOT_CHAR_LIMIT - metadata_length)
+                // successful_count,
+            ),
+        )
+
+    lines = list(header_lines)
+    for entry_lines, raw_result in entries:
+        lines.extend(entry_lines)
+        if raw_result is not None:
+            lines.append(_json_for_snapshot(raw_result, raw_result_limit))
+    return _truncate_text("\n".join(lines), _PREFETCH_SNAPSHOT_CHAR_LIMIT)
+
+
+def _freshness_correction_message(tracker: FreshnessTracker) -> str:
+    missing = "、".join(tracker.missing_requirements()) or "本轮实时数据"
+    return (
+        "你刚才试图在本轮实时证据未齐备时直接给出最终答复，该文本已被系统屏蔽。"
+        f"当前仍缺少：{missing}。请立即调用当前可见的查询工具补齐成功结果；"
+        "不要引用历史行情或历史账户数字，也不要先输出结论。"
+    )
+
+
+def _blocked_mutation_result(tool_name: str, reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "tool_name": tool_name,
+        "error": reason,
+        "summary": reason,
+        "result": None,
     }
 
 
@@ -502,56 +959,218 @@ class LLMService:
         messages: list[dict[str, Any]],
         emit: Any = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
-        request_payload = self.build_request_payload_from_messages(
-            app_settings=app_settings,
-            messages=messages,
-        )
         if not app_settings.llm_base_url or not app_settings.llm_api_key:
             raise RuntimeError("未配置大模型接口，无法执行 AI 调度。")
 
+        _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
         run_type = str(getattr(app_settings, "run_type", "analysis") or "analysis")
+        run_tool_context = build_skill_context(
+            run_type=run_type,
+            app_settings=app_settings,
+            client=client,
+        )
 
         def _run_tool_executor(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             return skill_registry.execute_tool(
                 tool_name=tool_name,
                 arguments=arguments,
-                context=build_skill_context(
-                    run_type=run_type,
-                    app_settings=app_settings,
-                    client=client,
-                ),
+                context=run_tool_context,
             )
 
-        result = self._run_agent_loop_with_retry(
-            model=app_settings.llm_model,
-            base_url=app_settings.llm_base_url,
-            api_key=app_settings.llm_api_key,
-            initial_messages=[dict(m) for m in request_payload["messages"]],
-            run_type=run_type,
-            timeout_seconds=getattr(app_settings, "timeout_seconds", 60),
-            tool_executor=_run_tool_executor,
-            emit=emit,
-            enable_reasoning_echo=getattr(
-                app_settings, "llm_enable_reasoning_content_echo", False
-            ),
-            reasoning_effort=getattr(app_settings, "llm_reasoning_effort", None),
-            max_retries=normalize_max_retries(
-                getattr(app_settings, "llm_max_retries", _DEFAULT_LLM_MAX_RETRIES)
-            ),
-        )
+        agent_messages = [dict(message) for message in messages]
+        prefetched_tool_calls: list[dict[str, Any]] = []
+        freshness_tracker: FreshnessTracker | None = None
+        enforce_freshness = run_type in {"analysis", "trade"}
 
+        if enforce_freshness:
+            freshness_tracker = FreshnessTracker(
+                run_type=run_type,
+                requires_orders=_requires_order_evidence(app_settings, run_type),
+            )
+            prefetch_plan: list[tuple[str, dict[str, Any]]] = [
+                (
+                    "mx_query_market",
+                    {
+                        "query": str(
+                            getattr(app_settings, "market_query", "") or ""
+                        ).strip()
+                        or "上证指数今天走势和市场概况"
+                    },
+                ),
+                (
+                    "mx_search_news",
+                    {
+                        "query": str(
+                            getattr(app_settings, "news_query", "") or ""
+                        ).strip()
+                        or "今天A股市场热点新闻"
+                    },
+                ),
+                ("mx_get_positions", {}),
+                ("mx_get_balance", {}),
+            ]
+            if freshness_tracker.requires_orders:
+                prefetch_plan.append(("mx_get_orders", {}))
+
+            _emit("stage", stage="prefetch", message="正在获取本轮实时数据快照")
+            for index, (tool_name, arguments) in enumerate(prefetch_plan, start=1):
+                tool_call_id = f"prefetch-{index}"
+                _emit(
+                    "tool_call",
+                    phase="prefetch",
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    arguments=arguments,
+                    status="running",
+                )
+                try:
+                    tool_result = _normalize_tool_result(
+                        tool_name, _run_tool_executor(tool_name, arguments)
+                    )
+                except Exception as exc:
+                    tool_result = {
+                        "ok": False,
+                        "tool_name": tool_name,
+                        "error": f"预取调用失败：{exc}",
+                        "summary": f"预取调用失败：{exc}",
+                        "result": None,
+                    }
+                captured_at = datetime.now(timezone.utc)
+                prefetched_tool_calls.append(
+                    {
+                        "name": tool_name,
+                        "arguments": dict(arguments),
+                        "result": tool_result,
+                        "prefetched": True,
+                        "captured_at": captured_at.isoformat(),
+                    }
+                )
+                freshness_tracker.record_prefetched_tool_result(
+                    tool_name, tool_result
+                )
+                business_ok = FreshnessTracker._is_business_success(tool_result)
+                _emit(
+                    "tool_call",
+                    phase="prefetch",
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    arguments=arguments,
+                    status="done",
+                    ok=business_ok,
+                    summary=tool_result.get("summary")
+                    or tool_result.get("error"),
+                )
+
+            snapshot_time = datetime.now(timezone.utc)
+            freshness_tracker.captured_at = snapshot_time.isoformat()
+            agent_messages.append(
+                {
+                    "role": "user",
+                    "content": _build_prefetch_snapshot(
+                        prefetched_tool_calls, snapshot_time
+                    ),
+                }
+            )
+
+        request_payload = self.build_request_payload_from_messages(
+            app_settings=app_settings,
+            messages=agent_messages,
+        )
+        try:
+            result = self._run_agent_loop_with_retry(
+                model=app_settings.llm_model,
+                base_url=app_settings.llm_base_url,
+                api_key=app_settings.llm_api_key,
+                initial_messages=[dict(m) for m in request_payload["messages"]],
+                run_type=run_type,
+                timeout_seconds=getattr(app_settings, "timeout_seconds", 60),
+                tool_executor=_run_tool_executor,
+                emit=emit,
+                enable_reasoning_echo=getattr(
+                    app_settings, "llm_enable_reasoning_content_echo", False
+                ),
+                reasoning_effort=getattr(app_settings, "llm_reasoning_effort", None),
+                max_retries=normalize_max_retries(
+                    getattr(app_settings, "llm_max_retries", _DEFAULT_LLM_MAX_RETRIES)
+                ),
+                enforce_freshness=enforce_freshness,
+                freshness_tracker=freshness_tracker,
+            )
+        except Exception as exc:
+            freshness_audit = (
+                freshness_tracker.to_dict() if freshness_tracker else {}
+            )
+            prefetched_audit = list(prefetched_tool_calls)
+            if isinstance(exc, (LLMFreshnessError, LLMMutationSafetyError)):
+                exc.prefetched_tool_calls = prefetched_audit
+                exc.freshness = freshness_audit
+                if isinstance(exc, LLMFreshnessError):
+                    exc.missing_requirements = list(
+                        freshness_audit.get("missing_requirements") or []
+                    )
+            else:
+                try:
+                    setattr(exc, "prefetched_tool_calls", prefetched_audit)
+                    setattr(exc, "freshness", freshness_audit)
+                except (AttributeError, TypeError):
+                    pass
+            raise
+
+        freshness = freshness_tracker.to_dict() if freshness_tracker else None
         return (
             {
                 "final_answer": result["final_answer"] or "模型本轮未返回可展示内容。",
                 "tool_calls": result["tool_history"],
+                "prefetched_tool_calls": prefetched_tool_calls,
+                "freshness": freshness,
             },
             request_payload,
             {
                 "responses": result["responses"],
                 "final_message": result["final_message"],
             },
-            {"messages": result["messages"]},
+            {"messages": result["messages"], "freshness": freshness},
         )
+
+    def _build_mutation_safety_result(
+        self,
+        *,
+        error: BaseException | str,
+        messages: list[dict[str, Any]],
+        response_history: list[dict[str, Any]],
+        tool_history: list[dict[str, Any]],
+        tracker: FreshnessTracker,
+        emit: Callable[..., Any],
+    ) -> dict[str, Any]:
+        mutation_names = "、".join(tracker.mutations_executed) or "变更工具"
+        final_answer = (
+            f"本轮已成功执行 {mutation_names}，但后续大模型响应异常。"
+            "为避免重复下单或重复变更，系统未从初始消息重试；"
+            "请以本轮工具执行记录和模拟账户实际状态为准。"
+        )
+        final_message = {"role": "assistant", "content": final_answer}
+        if (
+            messages
+            and messages[-1].get("role") == "assistant"
+            and not _to_text_content(messages[-1].get("content"))
+            and not messages[-1].get("tool_calls")
+        ):
+            messages[-1] = final_message
+        else:
+            messages.append(final_message)
+        self._emit_final_answer_stream(final_answer, emit=emit)
+        return {
+            "final_answer": final_answer,
+            "raw_final_answer": final_answer,
+            "tool_history": tool_history,
+            "responses": response_history,
+            "final_message": final_message,
+            "messages": messages,
+            "mutation_safety": {
+                "error": str(error),
+                "mutations": list(tracker.mutations_executed),
+            },
+        }
 
     def _agent_loop(
         self,
@@ -568,6 +1187,8 @@ class LLMService:
         enable_reasoning_echo: bool = False,
         reasoning_effort: str | None = None,
         max_retries: int | None = None,
+        enforce_freshness: bool = False,
+        freshness_tracker: FreshnessTracker | None = None,
     ) -> dict[str, Any]:
         _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
         messages: list[dict[str, Any]] = [dict(m) for m in initial_messages]
@@ -575,116 +1196,278 @@ class LLMService:
         tool_history: list[dict[str, Any]] = []
         normalized_effort = normalize_reasoning_effort(reasoning_effort)
         normalized_max_retries = normalize_max_retries(max_retries)
+        normalized_run_type = str(run_type or "").strip()
+        freshness_enabled = bool(
+            enforce_freshness and normalized_run_type in {"analysis", "trade"}
+        )
+        tracker = freshness_tracker
+        if freshness_enabled and tracker is None:
+            tracker = FreshnessTracker(run_type=normalized_run_type)
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
             _raise_if_cancelled(cancel_event)
-            iteration_payload = self._apply_reasoning_effort(
-                {
-                    "model": model,
-                    "temperature": _LLM_TEMPERATURE,
-                    "messages": messages,
-                    "tools": skill_registry.build_tools(run_type=run_type),
-                    "tool_choice": "auto",
-                },
-                normalized_effort,
+            final_buffer = (
+                _FinalEventBuffer(
+                    _emit,
+                    buffer_llm_messages=bool(
+                        tracker is not None and not tracker.is_ready()
+                    ),
+                )
+                if freshness_enabled
+                else None
             )
-            _emit("llm_request", iteration=iteration + 1, model=model)
-            response_payload = self._call_llm_stream(
-                base_url=base_url,
-                api_key=api_key,
-                payload=iteration_payload,
-                timeout_seconds=timeout_seconds,
-                emit=_emit,
-                cancel_event=cancel_event,
-                max_retries=normalized_max_retries,
-            )
-            response_history.append(response_payload)
-
-            choices = response_payload.get("choices") or []
-            if not choices:
-                raise RuntimeError("大模型未返回 choices。")
-
-            message = choices[0].get("message") or {}
-            assistant_entry: dict[str, Any] = {
-                "role": "assistant",
-                "content": message.get("content") or "",
-            }
-            if message.get("tool_calls"):
-                assistant_entry["tool_calls"] = message["tool_calls"]
-            if enable_reasoning_echo and message.get("reasoning_content"):
-                assistant_entry["reasoning_content"] = message["reasoning_content"]
-            messages.append(assistant_entry)
-
-            assistant_text = _to_text_content(message.get("content"))
-            tool_calls = message.get("tool_calls") or []
-            if assistant_text and tool_calls:
-                _emit("llm_message", iteration=iteration + 1, content=assistant_text)
-
-            if not tool_calls:
-                final_message = assistant_text
-                stream_meta = response_payload.get("stream_meta")
-                final_streamed = (
-                    isinstance(stream_meta, dict)
-                    and bool(stream_meta.get("final_streamed"))
+            iteration_emit: Callable[..., Any] = final_buffer or _emit
+            try:
+                available_tools = skill_registry.build_tools(run_type=run_type)
+                query_only_phase = bool(
+                    freshness_enabled and tracker is not None and not tracker.is_ready()
                 )
-                if not final_streamed:
-                    self._emit_final_answer_stream(final_message, emit=_emit)
-                return {
-                    "final_answer": final_message,
-                    "raw_final_answer": assistant_text,
-                    "tool_history": tool_history,
-                    "responses": response_history,
-                    "final_message": message,
-                    "messages": messages,
-                }
+                if query_only_phase:
+                    available_tools = [
+                        tool
+                        for tool in available_tools
+                        if _tool_spec_name(tool) in QUERY_TOOL_NAMES
+                    ]
+                    if not available_tools:
+                        raise LLMFreshnessError(
+                            "本轮实时证据未齐备，且当前运行没有可用的妙想查询工具。"
+                        )
 
-            for tool_call in tool_calls:
-                _raise_if_cancelled(cancel_event)
-                if not isinstance(tool_call, dict):
-                    continue
-                function_payload = tool_call.get("function") or {}
-                tool_name = str(function_payload.get("name") or "").strip()
-                arguments_text = function_payload.get("arguments") or "{}"
-                try:
-                    arguments = json.loads(arguments_text)
-                except json.JSONDecodeError as exc:
-                    raise RuntimeError(f"工具参数不是合法 JSON: {exc}") from exc
-
-                _emit(
-                    "tool_call",
-                    phase="llm",
-                    tool_name=tool_name,
-                    tool_call_id=tool_call.get("id"),
-                    arguments=arguments,
-                    status="running",
-                )
-                tool_result = tool_executor(tool_name, arguments)
-                _emit(
-                    "tool_call",
-                    phase="llm",
-                    tool_name=tool_name,
-                    tool_call_id=tool_call.get("id"),
-                    arguments=arguments,
-                    status="done",
-                    ok=bool(tool_result.get("ok")),
-                    summary=tool_result.get("summary"),
-                )
-                tool_history.append(
+                iteration_payload = self._apply_reasoning_effort(
                     {
+                        "model": model,
+                        "temperature": _LLM_TEMPERATURE,
+                        "messages": messages,
+                        "tools": available_tools,
+                        "tool_choice": "auto",
+                    },
+                    normalized_effort,
+                )
+                _emit(
+                    "llm_request",
+                    iteration=iteration + 1,
+                    model=model,
+                    freshness_ready=tracker.is_ready() if tracker else None,
+                    query_only=query_only_phase,
+                )
+                response_payload = self._call_llm_stream(
+                    base_url=base_url,
+                    api_key=api_key,
+                    payload=iteration_payload,
+                    timeout_seconds=timeout_seconds,
+                    emit=iteration_emit,
+                    cancel_event=cancel_event,
+                    max_retries=normalized_max_retries,
+                )
+                response_history.append(response_payload)
+
+                choices = response_payload.get("choices") or []
+                if not choices:
+                    raise RuntimeError("大模型未返回 choices。")
+
+                message = choices[0].get("message") or {}
+                assistant_entry: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": message.get("content") or "",
+                }
+                if message.get("tool_calls"):
+                    assistant_entry["tool_calls"] = message["tool_calls"]
+                if enable_reasoning_echo and message.get("reasoning_content"):
+                    assistant_entry["reasoning_content"] = message["reasoning_content"]
+                messages.append(assistant_entry)
+
+                assistant_text = _to_text_content(message.get("content"))
+                tool_calls = message.get("tool_calls") or []
+                if assistant_text and tool_calls:
+                    iteration_emit(
+                        "llm_message", iteration=iteration + 1, content=assistant_text
+                    )
+
+                if not tool_calls:
+                    if freshness_enabled and tracker is not None and not tracker.is_ready():
+                        if final_buffer is not None:
+                            final_buffer.discard()
+                        if tracker.correction_attempts >= _MAX_FRESHNESS_CORRECTIONS:
+                            missing = "、".join(tracker.missing_requirements())
+                            raise LLMFreshnessError(
+                                "大模型连续忽略本轮实时数据查询要求，"
+                                f"仍缺少：{missing or '必要实时证据'}。"
+                            )
+                        tracker.correction_attempts += 1
+                        correction = _freshness_correction_message(tracker)
+                        messages.append({"role": "user", "content": correction})
+                        _emit(
+                            "freshness_correction",
+                            attempt=tracker.correction_attempts,
+                            max_attempts=_MAX_FRESHNESS_CORRECTIONS,
+                            missing_requirements=tracker.missing_requirements(),
+                            message=correction,
+                        )
+                        continue
+
+                    final_message = assistant_text
+                    if freshness_enabled and not final_message.strip():
+                        if final_buffer is not None:
+                            final_buffer.discard()
+                        if tracker is not None and tracker.mutations_executed:
+                            return self._build_mutation_safety_result(
+                                error="大模型在成功变更后返回空答复",
+                                messages=messages,
+                                response_history=response_history,
+                                tool_history=tool_history,
+                                tracker=tracker,
+                                emit=_emit,
+                            )
+                        raise LLMEmptyResultError("大模型返回空内容，视为无效。")
+
+                    stream_meta = response_payload.get("stream_meta")
+                    final_streamed = (
+                        isinstance(stream_meta, dict)
+                        and bool(stream_meta.get("final_streamed"))
+                    )
+                    if not final_streamed:
+                        self._emit_final_answer_stream(
+                            final_message, emit=iteration_emit
+                        )
+                    if final_buffer is not None:
+                        final_buffer.flush()
+                    return {
+                        "final_answer": final_message,
+                        "raw_final_answer": assistant_text,
+                        "tool_history": tool_history,
+                        "responses": response_history,
+                        "final_message": message,
+                        "messages": messages,
+                    }
+
+                if final_buffer is not None:
+                    final_buffer.discard()
+
+                for tool_call in tool_calls:
+                    _raise_if_cancelled(cancel_event)
+                    if not isinstance(tool_call, dict):
+                        continue
+                    function_payload = tool_call.get("function") or {}
+                    tool_name = str(function_payload.get("name") or "").strip()
+                    arguments_value = function_payload.get("arguments") or "{}"
+                    if isinstance(arguments_value, dict):
+                        arguments = dict(arguments_value)
+                    else:
+                        try:
+                            arguments = json.loads(arguments_value)
+                        except (json.JSONDecodeError, TypeError) as exc:
+                            raise RuntimeError(
+                                f"工具参数不是合法 JSON: {exc}"
+                            ) from exc
+                    if not isinstance(arguments, dict):
+                        raise RuntimeError("工具参数必须是 JSON 对象。")
+
+                    _emit(
+                        "tool_call",
+                        phase="llm",
+                        tool_name=tool_name,
+                        tool_call_id=tool_call.get("id"),
+                        arguments=arguments,
+                        status="running",
+                    )
+
+                    tool_result: dict[str, Any]
+                    if (
+                        freshness_enabled
+                        and tracker is not None
+                        and tool_name == "mx_moni_cancel"
+                        and "mx_get_orders" not in tracker.successful_query_tools
+                    ):
+                        tracker.requires_orders = True
+                        tool_result = _blocked_mutation_result(
+                            tool_name,
+                            "撤单前必须先成功查询本轮最新委托；请先调用 mx_get_orders。",
+                        )
+                    elif (
+                        freshness_enabled
+                        and tracker is not None
+                        and tool_name in MUTATION_TOOL_NAMES
+                        and (query_only_phase or not tracker.is_ready())
+                    ):
+                        tool_result = _blocked_mutation_result(
+                            tool_name,
+                            "本轮实时行情、持仓和资金证据尚未齐备，已拒绝变更操作。",
+                        )
+                    else:
+                        tool_result = _normalize_tool_result(
+                            tool_name, tool_executor(tool_name, arguments)
+                        )
+
+                    history_entry = {
                         "id": tool_call.get("id"),
                         "name": tool_name,
                         "arguments": arguments,
                         "result": tool_result,
                     }
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.get("id"),
-                        "content": _safe_json_dumps(_slim_tool_result(tool_result)),
-                    }
-                )
+                    tool_history.append(history_entry)
+                    if freshness_enabled and tracker is not None:
+                        tracker.record_tool_result(tool_name, tool_result)
+                    _emit(
+                        "tool_call",
+                        phase="llm",
+                        tool_name=tool_name,
+                        tool_call_id=tool_call.get("id"),
+                        arguments=arguments,
+                        status="done",
+                        ok=bool(tool_result.get("ok")),
+                        summary=tool_result.get("summary")
+                        or tool_result.get("error"),
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.get("id"),
+                            "content": _safe_json_dumps(
+                                _slim_tool_result(tool_result)
+                            ),
+                        }
+                    )
+            except LLMStreamCancelled:
+                if final_buffer is not None:
+                    final_buffer.discard()
+                raise
+            except (LLMFreshnessError, LLMMutationSafetyError) as exc:
+                if final_buffer is not None:
+                    final_buffer.discard()
+                if tracker is not None:
+                    exc.freshness = tracker.to_dict()
+                    if isinstance(exc, LLMFreshnessError):
+                        exc.missing_requirements = tracker.missing_requirements()
+                raise
+            except Exception as exc:
+                if final_buffer is not None:
+                    final_buffer.discard()
+                if freshness_enabled and tracker is not None and tracker.mutations_executed:
+                    partial_result = self._build_mutation_safety_result(
+                        error=exc,
+                        messages=messages,
+                        response_history=response_history,
+                        tool_history=tool_history,
+                        tracker=tracker,
+                        emit=_emit,
+                    )
+                    raise LLMMutationSafetyError(
+                        "成功变更后大模型响应异常，已禁止整轮重试。",
+                        mutations=list(tracker.mutations_executed),
+                        freshness=tracker.to_dict(),
+                        partial_result=partial_result,
+                    ) from exc
+                raise
 
+        if freshness_enabled and tracker is not None and tracker.mutations_executed:
+            return self._build_mutation_safety_result(
+                error="大模型工具调用轮次超限",
+                messages=messages,
+                response_history=response_history,
+                tool_history=tool_history,
+                tracker=tracker,
+                emit=_emit,
+            )
         raise RuntimeError("大模型工具调用轮次超限，已中止。")
 
     def _run_agent_loop_with_retry(
@@ -702,63 +1485,101 @@ class LLMService:
         enable_reasoning_echo: bool = False,
         reasoning_effort: str | None = None,
         max_retries: int | None = None,
+        enforce_freshness: bool = False,
+        freshness_tracker: FreshnessTracker | None = None,
     ) -> dict[str, Any]:
-        """Run ``_agent_loop`` with a unified whole-round retry policy.
+        """Retry ordinary whole-round failures while preserving safety state.
 
-        Any exception raised by ``_agent_loop`` triggers a retry (up to
-        ``max_retries`` extra attempts). A normally-returned result is also
-        rejected (and retried) when it is deemed invalid for the run type:
-
-        * analysis/trade: the round must have invoked at least one tool;
-          otherwise (including empty content) it is retried.
-        * chat: only a truly empty answer (raw text blank) is retried; a plain
-          text answer without tool calls is a valid success.
-
-        ``LLMStreamCancelled`` (client disconnect) is never retried.
+        Provider failures and empty answers may replay ``initial_messages`` when
+        no mutation has succeeded. Freshness-policy failures and mutation-safety
+        failures never replay a round. Chat keeps the legacy retry behavior
+        because its freshness gate is disabled.
         """
         _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
         budget = normalize_max_retries(max_retries)
         last_error: BaseException | None = None
         normalized_effort = normalize_reasoning_effort(reasoning_effort)
         normalized_retries = normalize_max_retries(max_retries)
+        normalized_run_type = str(run_type or "").strip()
+        freshness_enabled = bool(
+            enforce_freshness and normalized_run_type in {"analysis", "trade"}
+        )
+        tracker = freshness_tracker
+        if freshness_enabled and tracker is None:
+            tracker = FreshnessTracker(run_type=normalized_run_type)
 
         for attempt in range(budget + 1):
             _raise_if_cancelled(cancel_event)
             try:
-                result = self._agent_loop(
-                    model=model,
-                    base_url=base_url,
-                    api_key=api_key,
-                    initial_messages=initial_messages,
-                    run_type=run_type,
-                    timeout_seconds=timeout_seconds,
-                    tool_executor=tool_executor,
-                    emit=_emit,
-                    cancel_event=cancel_event,
-                    enable_reasoning_echo=enable_reasoning_echo,
-                    reasoning_effort=normalized_effort,
-                    max_retries=normalized_retries,
-                )
+                agent_loop_kwargs: dict[str, Any] = {
+                    "model": model,
+                    "base_url": base_url,
+                    "api_key": api_key,
+                    "initial_messages": initial_messages,
+                    "run_type": run_type,
+                    "timeout_seconds": timeout_seconds,
+                    "tool_executor": tool_executor,
+                    "emit": _emit,
+                    "cancel_event": cancel_event,
+                    "enable_reasoning_echo": enable_reasoning_echo,
+                    "reasoning_effort": normalized_effort,
+                    "max_retries": normalized_retries,
+                }
+                if freshness_enabled:
+                    agent_loop_kwargs.update(
+                        {
+                            "enforce_freshness": True,
+                            "freshness_tracker": tracker,
+                        }
+                    )
+                result = self._agent_loop(**agent_loop_kwargs)
                 raw_answer = str(result.get("raw_final_answer") or "").strip()
                 if not raw_answer:
+                    if tracker is not None and tracker.mutations_executed:
+                        return self._build_mutation_safety_result(
+                            error="大模型在成功变更后返回空答复",
+                            messages=result.get("messages")
+                            if isinstance(result.get("messages"), list)
+                            else [],
+                            response_history=result.get("responses")
+                            if isinstance(result.get("responses"), list)
+                            else [],
+                            tool_history=result.get("tool_history")
+                            if isinstance(result.get("tool_history"), list)
+                            else [],
+                            tracker=tracker,
+                            emit=_emit,
+                        )
                     raise LLMEmptyResultError("大模型返回空内容，视为无效。")
                 return result
             except LLMStreamCancelled:
                 raise
+            except LLMFreshnessError as exc:
+                if tracker is not None:
+                    exc.freshness = tracker.to_dict()
+                    exc.missing_requirements = tracker.missing_requirements()
+                raise
+            except LLMMutationSafetyError as exc:
+                if tracker is not None:
+                    exc.freshness = tracker.to_dict()
+                if exc.partial_result is not None:
+                    return exc.partial_result
+                raise
             except Exception as exc:
+                if tracker is not None and tracker.mutations_executed:
+                    raise LLMMutationSafetyError(
+                        "成功变更后发生异常，已禁止从初始消息整轮重试。",
+                        mutations=list(tracker.mutations_executed),
+                        freshness=tracker.to_dict(),
+                    ) from exc
+
                 last_error = exc
                 if attempt >= budget:
                     raise _annotate_retry_exhaustion(exc, attempt) from exc
 
+                if tracker is not None:
+                    tracker.reset_for_round_retry()
                 delay = _retry_delay_seconds(attempt)
-                if str(run_type or "").strip() == "trade":
-                    logger.warning(
-                        "trade 模式整轮重试，可能重复下单 "
-                        "(attempt %s/%s, %s)",
-                        attempt + 1,
-                        budget,
-                        exc,
-                    )
                 logger.warning(
                     "LLM agent round attempt %s/%s failed (%s); retrying in %.2fs",
                     attempt + 1,

@@ -1170,7 +1170,10 @@ def test_context_summary_system_message_uses_compressed_summary_label(
 
     assert message == {
         "role": "system",
-        "content": "[上下文压缩摘要]\n## 当前策略\n- 继续观察",
+        "content": (
+            "[上下文压缩摘要（历史策略记忆，行情/资讯/持仓/资金/委托均已过期，"
+            "不是本轮事实）]\n## 当前策略\n- 继续观察"
+        ),
     }
     database_module._engine = None
     database_module._session_local = None

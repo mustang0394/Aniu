@@ -37,6 +37,43 @@ COMMON_TOOL_NAMES: set[str] = {
     "mx_manage_self_select",
 }
 
+# --- Tool grouping for freshness gating ---
+# Market/data query tools (any one satisfies the market-query readiness requirement).
+MARKET_QUERY_TOOL_NAMES: set[str] = {
+    "mx_query_market",
+    "mx_search_news",
+    "mx_screen_stocks",
+}
+
+# Account snapshot query tools (both required for readiness in analysis/trade).
+ACCOUNT_QUERY_TOOL_NAMES: set[str] = {
+    "mx_get_positions",
+    "mx_get_balance",
+}
+
+# Order query tool (required only when the task involves cancel/order status).
+ORDER_QUERY_TOOL_NAMES: set[str] = {
+    "mx_get_orders",
+}
+
+# All read-only MX query tools (no mutations).  Used to filter the tool payload
+# during the data-gathering phase so the model cannot place orders before
+# fresh data is confirmed.
+QUERY_TOOL_NAMES: set[str] = (
+    MARKET_QUERY_TOOL_NAMES
+    | ACCOUNT_QUERY_TOOL_NAMES
+    | ORDER_QUERY_TOOL_NAMES
+    | {"mx_get_self_selects"}
+)
+
+# Mutation tools that change state (trades, cancels, self-select management).
+# A successful call to any of these makes the round non-retryable.
+MUTATION_TOOL_NAMES: set[str] = {
+    "mx_manage_self_select",
+    "mx_moni_trade",
+    "mx_moni_cancel",
+}
+
 TRADE_TOOL_NAMES: set[str] = {
     "mx_moni_trade",
     "mx_moni_cancel",

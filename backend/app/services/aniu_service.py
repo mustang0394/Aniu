@@ -1866,6 +1866,7 @@ class AniuService:
 
             settings_snapshot = {
                 "id": settings.id,
+                "app_display_name": getattr(settings, "app_display_name", ""),
                 "mx_api_key": settings.mx_api_key,
                 "llm_base_url": settings.llm_base_url,
                 "llm_api_key": settings.llm_api_key,
@@ -2171,6 +2172,7 @@ class AniuService:
                         run_id=run_id,
                         trigger_source=trigger_source,
                         schedule_name=settings_snapshot.get("schedule_name"),
+                        app_display_name=settings_snapshot.get("app_display_name") or "",
                     )
                 except Exception:
                     logger.warning(

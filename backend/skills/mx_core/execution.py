@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from skills.mx_core.client import MXClient
 from skills.mx_core.capital_seal import (
     apply_seal_to_balance_payload,
     check_buy_against_virtual_cash,
+    estimate_buy_notional,
     extract_virtual_cash_from_balance_payload,
     get_seal_config,
 )
+
+logger = logging.getLogger(__name__)
 from skills.mx_core.markets import (
     MARKET_LABELS,
     append_market_constraint_to_query,
@@ -33,6 +37,84 @@ ERROR_HINTS: tuple[tuple[str, str], ...] = (
     ("No dataTable found", "本次查询没有返回可用数据表，请放宽查询条件或到东方财富妙想 AI 页面确认查询方式。"),
     ("筛选结果为空", "本次筛选没有匹配到股票，请放宽选股条件。"),
 )
+
+
+# 妙想余额 payload 中账户总资产字段的候选键（与 aniu_service 口径一致）。
+_TOTAL_ASSET_KEYS = (
+    "totalAsset",
+    "totalAssets",
+    "asset",
+    "totalMoney",
+    "total_assets",
+)
+_POSITION_ROW_KEYS = ("data", "rows", "list", "posList")
+_POSITION_CODE_KEYS = ("stockCode", "code", "SECURITY_CODE", "secCode")
+
+
+def _extract_balance_total_assets(payload: dict[str, Any] | None) -> float | None:
+    """从妙想余额 payload 中提取账户总资产；缺失或解析失败返回 None。"""
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        data = payload
+    for key in _TOTAL_ASSET_KEYS:
+        try:
+            value = float(data.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    nested = data.get("result")
+    if isinstance(nested, dict):
+        try:
+            value = float(nested.get("totalAssets"))
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            return value
+    return None
+
+
+def _extract_position_quantity(
+    payload: dict[str, Any] | None, symbol: str
+) -> int | None:
+    """从妙想持仓 payload 中提取指定股票的持仓数量（count 字段）。"""
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    rows: list[Any] = []
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        for key in _POSITION_ROW_KEYS:
+            candidate = data.get(key)
+            if isinstance(candidate, list):
+                rows = candidate
+                break
+    target = str(symbol or "").strip()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = ""
+        for key in _POSITION_CODE_KEYS:
+            raw = row.get(key)
+            if raw is not None:
+                code = str(raw).strip()
+                break
+        if not code:
+            continue
+        if code != target and not code.startswith(target + ".") and not code.startswith(
+            target + "_"
+        ):
+            continue
+        try:
+            held = int(float(row.get("count")))
+        except (TypeError, ValueError):
+            continue
+        if held > 0:
+            return held
+    return None
 
 
 class MXExecutionService:
@@ -290,6 +372,14 @@ class MXExecutionService:
                         "virtual_cash_balance": virtual_cash,
                     }
 
+        position_pct = self._compute_position_pct(
+            client=client,
+            action=action,
+            symbol=symbol,
+            quantity=quantity,
+            price=price,
+            price_type=price_type,
+        )
         result = client.trade(
             action=action,
             symbol=symbol,
@@ -310,8 +400,55 @@ class MXExecutionService:
                 "price_type": price_type,
                 "price": price,
                 "reason": reason,
+                "position_pct": position_pct,
             },
         }
+
+    def _compute_position_pct(
+        self,
+        *,
+        client: MXClient,
+        action: str,
+        symbol: str,
+        quantity: int,
+        price: float | None,
+        price_type: str,
+    ) -> float | None:
+        """计算本次操作对应的仓位比例（百分比，0-100）。
+
+        - BUY：买入金额 / 账户总资产（按委托前口径计算，避免买入后
+          总资产膨胀导致比例偏低）。
+        - SELL：卖出数量 / 该股票委托前持仓数量。
+
+        市价买入且未提供参考价格时金额不可靠，返回 None；任何查询或
+        解析失败同样返回 None，绝不阻塞交易本身。
+        """
+        try:
+            if action == "BUY":
+                notional = estimate_buy_notional(
+                    quantity=quantity,
+                    price=price,
+                    price_type=price_type,
+                )
+                if not notional or notional <= 0:
+                    return None
+                total_assets = _extract_balance_total_assets(client.get_balance())
+                if total_assets and total_assets > 0:
+                    return round(min(100.0, notional / total_assets * 100), 2)
+                return None
+            if action == "SELL":
+                held = _extract_position_quantity(client.get_positions(), symbol)
+                if held and held > 0:
+                    return round(min(100.0, quantity / held * 100), 2)
+                return None
+        except Exception:
+            logger.warning(
+                "compute position_pct failed: action=%s symbol=%s",
+                action,
+                symbol,
+                exc_info=True,
+            )
+        return None
 
     def _handle_moni_cancel(
         self, *, client: MXClient, app_settings: Any, arguments: dict[str, Any]

@@ -2534,6 +2534,7 @@ class AniuService:
                 "price_type": str(executed_action.get("price_type") or "MARKET"),
                 "price": executed_action.get("price"),
                 "reason": str(executed_action.get("reason") or "").strip(),
+                "position_pct": executed_action.get("position_pct"),
                 "status": "submitted",
                 "response": result.get("result"),
             }

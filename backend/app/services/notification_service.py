@@ -75,6 +75,28 @@ def _truncate_reason(reason: str) -> str:
     return reason[:_REASON_MAX_CHARS] + "…"
 
 
+def _format_position_pct(action: str, position_pct: object) -> str:
+    """将仓位比例格式化为订单行后缀；缺失或非法值返回空串。
+
+    BUY 表示买入金额占账户总仓位的比例，SELL 表示卖出数量占该股
+    持仓量的比例（均在委托前口径计算，见 mx_core/execution.py）。
+    """
+    if position_pct is None:
+        return ""
+    try:
+        pct = float(position_pct)
+    except (TypeError, ValueError):
+        return ""
+    if pct <= 0 or pct > 100:
+        return ""
+    text = f"{round(pct, 1):g}"
+    if str(action).upper() == "BUY":
+        return f"（占仓位 {text}%）"
+    if str(action).upper() == "SELL":
+        return f"（占持仓 {text}%）"
+    return ""
+
+
 def _build_trade_message(
     *,
     trade_orders: list[dict],
@@ -127,12 +149,15 @@ def _build_trade_message(
         else:
             price_part = ""
 
+        pct_part = _format_position_pct(action, order.get("position_pct"))
         lines.append(
             f"{emoji} <b>{label}</b> {html.escape(symbol)}{name_part}"
-            f" x{quantity}{price_part}"
+            f" x{quantity}{price_part}{pct_part}"
         )
 
         if reason:
-            lines.append(f"  \U0001f4ac 理由: {html.escape(_truncate_reason(reason))}")
+            lines.append(
+                f"\U0001f4ac 理由: {html.escape(_truncate_reason(reason))}"
+            )
 
     return "\n".join(lines)

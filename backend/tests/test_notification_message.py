@@ -128,7 +128,7 @@ def test_reason_truncation() -> None:
     )
     # 截断后以省略号结尾
     reason_line = next(
-        line for line in msg.splitlines() if line.startswith("  💬 理由:")
+        line for line in msg.splitlines() if line.startswith("💬 理由:")
     )
     # 200 字符理由 + 省略号（split 后的 body 带一个前导空格）
     body = reason_line.split("理由:", 1)[1].strip()
@@ -213,3 +213,79 @@ def test_multiple_orders_each_get_reason_line() -> None:
     assert msg.count("💬 理由:") == 2
     assert "理由A" in msg
     assert "理由B" in msg
+
+
+def test_buy_position_pct_display() -> None:
+    orders = _base_orders()
+    orders[0]["position_pct"] = 10.0
+    msg = _build_trade_message(
+        trade_orders=orders,
+        run_id=1,
+        trigger_source="manual",
+        schedule_name=None,
+        app_display_name="",
+    )
+    assert "（占仓位 10%）" in msg
+
+
+def test_buy_position_pct_fraction_display() -> None:
+    orders = _base_orders()
+    orders[0]["position_pct"] = 9.87
+    msg = _build_trade_message(
+        trade_orders=orders,
+        run_id=1,
+        trigger_source="manual",
+        schedule_name=None,
+        app_display_name="",
+    )
+    assert "（占仓位 9.9%）" in msg
+
+
+def test_sell_position_pct_display() -> None:
+    orders = [
+        {
+            "action": "SELL",
+            "symbol": "000001",
+            "name": "平安银行",
+            "quantity": 500,
+            "price_type": "MARKET",
+            "price": None,
+            "reason": "",
+            "position_pct": 50.0,
+        }
+    ]
+    msg = _build_trade_message(
+        trade_orders=orders,
+        run_id=1,
+        trigger_source="manual",
+        schedule_name=None,
+        app_display_name="",
+    )
+    assert "（占持仓 50%）" in msg
+
+
+def test_position_pct_missing_omits_suffix() -> None:
+    orders = _base_orders()  # 无 position_pct 字段
+    msg = _build_trade_message(
+        trade_orders=orders,
+        run_id=1,
+        trigger_source="manual",
+        schedule_name=None,
+        app_display_name="",
+    )
+    assert "占仓位" not in msg
+    assert "占持仓" not in msg
+
+
+def test_position_pct_invalid_omits_suffix() -> None:
+    orders = _base_orders()
+    orders[0]["position_pct"] = "not-a-number"
+    msg = _build_trade_message(
+        trade_orders=orders,
+        run_id=1,
+        trigger_source="manual",
+        schedule_name=None,
+        app_display_name="",
+    )
+    assert "占仓位" not in msg
+    assert "占持仓" not in msg

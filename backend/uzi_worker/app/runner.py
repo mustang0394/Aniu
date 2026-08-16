@@ -286,7 +286,9 @@ class JobRunner:
             str(self._report_root),
             "--source-root",
             str(self._source_root),
-            "--mock" if self._mock else "--no-mock",
+            # store_true：仅在 mock 模式传 --mock；非 mock 模式不传任何参数
+            # （默认 False 即真实模式）。此前传 --no-mock 会导致 argparse 报错。
+            *(["--mock"] if self._mock else []),
         ]
         env = dict(os.environ)
         env.update(get_stage_env())

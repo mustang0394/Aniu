@@ -22,7 +22,7 @@ from app.skills import skill_registry
 def create_test_client(monkeypatch, tmp_path: Path) -> TestClient:
     monkeypatch.setenv("APP_LOGIN_PASSWORD", "release-pass")
     monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
-    monkeypatch.setattr(trading_calendar_service, "ensure_years", lambda years: None)
+    monkeypatch.setattr(trading_calendar_service, "ensure_months", lambda keys: None)
     monkeypatch.setattr(scheduler_service, "start", lambda: None)
     monkeypatch.setattr(scheduler_service, "stop", lambda: None)
     get_settings.cache_clear()

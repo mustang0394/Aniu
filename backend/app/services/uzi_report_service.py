@@ -684,7 +684,11 @@ class UziReportService:
             phase = str(worker_state.get("phase") or "").strip()
             # Stage 1 完成标志：worker status=succeeded 且本地已有 stage1-manifest.json
             stage1_manifest = self._read_stage1_manifest(report_id)
-            stage1_done = stage1_manifest is not None and status == "succeeded"
+            stage1_done = (
+                stage1_manifest is not None
+                and status == "succeeded"
+                and phase == "stage1_done"
+            )
             if stage1_done:
                 # Worker 已完成 Stage 1：跳过提交，直接进入 LLM 评审。
                 self._sync_worker_progress(report_id, worker_state)
@@ -734,7 +738,8 @@ class UziReportService:
             worker_state = self._worker.get_job(report_id)
             if worker_state is not None:
                 status = str(worker_state.get("status") or "").strip()
-                if status == "succeeded":
+                phase = str(worker_state.get("phase") or "").strip()
+                if status == "succeeded" and phase == "stage1_done":
                     self._sync_worker_progress(report_id, worker_state)
                     return
                 if status in {"accepted", "running"}:
@@ -1016,32 +1021,41 @@ class UziReportService:
 
         # 恢复语义（§17.1）：先查询 Worker 已有任务状态，避免重启后重复提交。
         # 注意：Worker 的 job state 是 stage1/stage2 共享的，
-        # status=succeeded 可能是 Stage 1 完成（而非 Stage 2），
-        # 因此必须额外检查 Stage 2 产物（artifacts/synthesis.json）是否存在。
+        # status=succeeded 可能是 Stage 1 完成（而非 Stage 2）。
+        # 只有 phase=completed 且所有关键产物齐全时才允许直接落库。
         worker_state = self._worker.get_job(report_id)
-        artifacts_synthesis = self._resolve_report_dir(str(report_id))
-        stage2_done = (
-            artifacts_synthesis is not None
-            and (artifacts_synthesis / "artifacts" / "synthesis.json").is_file()
-        )
+        stage2_done = self._stage2_artifacts_complete(report_id)
         if worker_state is not None:
             status = str(worker_state.get("status") or "").strip()
+            phase = str(worker_state.get("phase") or "").strip()
             if status == "succeeded":
-                if stage2_done:
+                if phase == "completed" and stage2_done:
                     # Stage 2 确已完成：跳过提交，直接落库。
                     self._sync_worker_progress(report_id, worker_state)
                     return
                 # status=succeeded 但无 Stage 2 产物：Stage 1 已完成，
                 # 需要 submit_stage2，不跳过。
             elif status in {"accepted", "running"}:
-                # Worker 仍在执行：只轮询，不重复提交。
+                # Worker 仍在执行：只轮询，不重复提交。轮询结束后必须
+                # 重新检查 phase；Stage 1 完成时还要继续提交 Stage 2。
                 self._sync_worker_progress(report_id, worker_state)
                 self._poll_worker(
                     report_id,
                     until={"succeeded", "failed", "cancelled"},
                     deadline=deadline,
                 )
-                return
+                worker_state = self._worker.get_job(report_id)
+                status = str((worker_state or {}).get("status") or "").strip()
+                phase = str((worker_state or {}).get("phase") or "").strip()
+                stage2_done = self._stage2_artifacts_complete(report_id)
+                if status == "succeeded" and phase == "completed" and stage2_done:
+                    self._sync_worker_progress(report_id, worker_state)
+                    return
+                if status != "succeeded" or phase != "stage1_done":
+                    raise _JobFailed(
+                        ERROR_STAGE2_FAILED,
+                        "Worker Stage 2 状态未完成且无法恢复。",
+                    )
             if status in {"failed", "cancelled"}:
                 raise _JobFailed(
                     ERROR_STAGE2_FAILED if status == "failed" else ERROR_CANCELLED,
@@ -1065,7 +1079,12 @@ class UziReportService:
             worker_state = self._worker.get_job(report_id)
             if worker_state is not None:
                 status = str(worker_state.get("status") or "").strip()
-                if status == "succeeded":
+                phase = str(worker_state.get("phase") or "").strip()
+                if (
+                    status == "succeeded"
+                    and phase == "completed"
+                    and self._stage2_artifacts_complete(report_id)
+                ):
                     self._sync_worker_progress(report_id, worker_state)
                     return
                 if status in {"accepted", "running"}:
@@ -1074,7 +1093,15 @@ class UziReportService:
                         until={"succeeded", "failed", "cancelled"},
                         deadline=deadline,
                     )
-                    return
+                    worker_state = self._worker.get_job(report_id)
+                    if (
+                        worker_state is not None
+                        and str(worker_state.get("status") or "").strip() == "succeeded"
+                        and str(worker_state.get("phase") or "").strip() == "completed"
+                        and self._stage2_artifacts_complete(report_id)
+                    ):
+                        self._sync_worker_progress(report_id, worker_state)
+                        return
             raise _JobFailed(ERROR_STAGE2_FAILED, f"Stage 2 提交失败：{exc}") from exc
         if payload is None:
             raise _JobFailed(ERROR_STAGE2_FAILED, "Stage 2 提交失败（Worker 不可达）。")
@@ -1108,7 +1135,9 @@ class UziReportService:
             )
             job.summary_json = summary
             job.artifact_manifest_json = manifest
-            job.data_as_of = self._parse_data_as_of(synthesis.get("data_as_of"))
+            # 与 summary_json 保持同一回退语义：Stage 2 没有 data_as_of 时，
+            # 使用 Stage 1 manifest 的数据时间，避免列表和详情返回不一致。
+            job.data_as_of = self._parse_data_as_of(summary.get("data_as_of"))
             self._update_progress(
                 db, job,
                 status="completed", phase="completed", progress=100,
@@ -1157,7 +1186,10 @@ class UziReportService:
 
         # 数据缺口：synthesis.data_gaps（stage2 从 _data_gaps.json 合并）
         dg = synthesis.get("data_gaps") or {}
-        data_gap_items = list(dg.get("tasks") or [])
+        data_gap_items = [
+            self._format_data_gap_item(item)
+            for item in (dg.get("tasks") or [])
+        ]
         coverage_pct = dg.get("coverage_pct")
         try:
             coverage_pct = float(coverage_pct) if coverage_pct is not None else 0.0
@@ -1223,8 +1255,8 @@ class UziReportService:
             "one_liner": one_liner,
             "valuation": {
                 "rating": str(inst.get("initiating_rating") or "").strip(),
-                "target_price": float(target_price) if target_price is not None else 0,
-                "upside_pct": float(upside_pct) if upside_pct is not None else 0,
+                "target_price": self._safe_float(target_price),
+                "upside_pct": self._safe_float(upside_pct),
                 "methods": valuation_methods,
             },
             "risks": list(synthesis.get("risks") or []),
@@ -1246,6 +1278,29 @@ class UziReportService:
             "generated_at": str(manifest.get("generated_at") or ""),
             "disclaimer": "历史研究资料，不构成投资建议",
         }
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value) if value is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _format_data_gap_item(item: Any) -> str:
+        if isinstance(item, str):
+            return item.strip()
+        if isinstance(item, dict):
+            dim = str(item.get("dim") or item.get("dimension") or "").strip()
+            field = str(item.get("field") or item.get("item") or "").strip()
+            severity = str(item.get("severity") or "").strip()
+            detail = str(item.get("reason") or item.get("message") or "").strip()
+            label = ".".join(part for part in (dim, field) if part)
+            parts = [part for part in (label, detail) if part]
+            if severity:
+                parts.append(f"严重性：{severity}")
+            return "；".join(parts) or "未命名数据缺口"
+        return str(item).strip()
 
     @staticmethod
     def _parse_data_as_of(value: Any) -> datetime | None:
@@ -1427,7 +1482,26 @@ class UziReportService:
             return False
         if report_dir is None:
             return False
-        return (report_dir / "artifacts" / "synthesis.json").is_file()
+        return self._stage2_artifacts_complete_at(report_dir)
+
+    def _stage2_artifacts_complete(self, report_id: int) -> bool:
+        try:
+            report_dir = self._resolve_report_dir(str(report_id))
+        except RuntimeError:
+            return False
+        return report_dir is not None and self._stage2_artifacts_complete_at(report_dir)
+
+    @staticmethod
+    def _stage2_artifacts_complete_at(report_dir: Path) -> bool:
+        artifacts = report_dir / "artifacts"
+        return all(
+            (artifacts / file_name).is_file()
+            for file_name in (
+                "synthesis.json",
+                "artifact-manifest.json",
+                "full-report-standalone.html",
+            )
+        )
 
     def _resume_from_artifacts(self, db, job: UziReportJob) -> None:
         """本地已有完整产物：从清单恢复为 completed。"""

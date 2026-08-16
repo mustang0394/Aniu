@@ -101,6 +101,39 @@ def test_missing_llm_config_raises_stable_code(monkeypatch, tmp_path) -> None:
         assert exc.error_code == ERROR_LLM_NOT_CONFIGURED
 
 
+def test_llm_deadline_caps_single_request_timeout(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import app.services.uzi_llm_orchestrator as orchestrator_module
+
+    captured: dict[str, int] = {}
+
+    class _FakeLLM:
+        def _call_llm_stream(self, **kwargs):
+            captured["timeout"] = kwargs["timeout_seconds"]
+            return {"choices": []}
+
+    clock = [100.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: clock[0])
+    orchestrator = orchestrator_module.UziLlmOrchestrator(llm_service=_FakeLLM())
+    orchestrator._deadline = 105.0
+    settings = SimpleNamespace(
+        llm_base_url="https://llm.example.com/v1",
+        llm_api_key="sk-test",
+        llm_model="m",
+        llm_max_retries=0,
+        llm_timeout_seconds=99,
+    )
+
+    orchestrator._call_llm(
+        app_settings=settings,
+        payload={"model": "m", "messages": []},
+        cancel_event=None,
+    )
+
+    assert captured["timeout"] == 5
+
+
 def test_llm_api_key_never_sent_to_worker(monkeypatch) -> None:
     """Worker 客户端请求体不含 LLM API Key（§13.1 / §20.3）。"""
     import httpx

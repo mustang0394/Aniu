@@ -182,7 +182,7 @@ def create_uzi_test_client(
     monkeypatch.setenv("UZI_WORKER_SHARED_SECRET", "test-secret")
     monkeypatch.setenv("UZI_REPORT_ROOT", str(tmp_path / "uzi_reports"))
     monkeypatch.setenv("UZI_LLM_REVIEW_MOCK", "1")
-    monkeypatch.setattr(trading_calendar_service, "ensure_years", lambda years: None)
+    monkeypatch.setattr(trading_calendar_service, "ensure_months", lambda keys: None)
     monkeypatch.setattr(scheduler_service, "start", lambda: None)
     monkeypatch.setattr(scheduler_service, "stop", lambda: None)
     get_settings.cache_clear()

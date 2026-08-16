@@ -255,7 +255,12 @@ class Skill(BaseSkill):
                         str(job.ticker_normalized or "").strip(),
                         str(job.ticker_input or "").strip(),
                     }
-                    if ticker not in match_tickers:
+                    match_values = {
+                        value.casefold()
+                        for value in (*match_tickers, str(job.company_name or "").strip())
+                        if value
+                    }
+                    if ticker.casefold() not in match_values:
                         return {
                             "ok": False,
                             "tool_name": "uzi_get_report_context",

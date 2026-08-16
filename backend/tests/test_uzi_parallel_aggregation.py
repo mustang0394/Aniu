@@ -109,7 +109,7 @@ def _response_for(subtask_id: str) -> dict:
             "conclusions": [{"claim": f"{subtask_id} 结论"}],
             "distribution": {"bullish": 5, "neutral": 2, "bearish": 1},
             "per_investor_override": {
-                f"{subtask_id}_inv1": {
+                "buffett": {
                     "signal": "bullish",
                     "score": 80,
                     "headline": f"{subtask_id} 看多",
@@ -178,6 +178,23 @@ def test_parallel_aggregation_writes_agent_analysis(monkeypatch, tmp_path) -> No
         "qual_a", "qual_b", "qual_c", "consistency", "synthesis",
     }
     assert result["agent_analysis"]["disclaimer"]
+
+
+def test_panel_subtasks_distribute_unknown_group_investors() -> None:
+    stage1 = {
+        "panel": {
+            "signal_distribution": {"bullish": 4},
+            "investors": [
+                {"investor_id": str(index), "name": f"投资者{index}", "group": "school_x"}
+                for index in range(8)
+            ],
+        }
+    }
+    subtasks = UziLlmOrchestrator()._panel_subtasks(stage1)
+    assigned = [investor_id for item in subtasks for investor_id in item["investor_ids"]]
+
+    assert sorted(assigned) == [str(index) for index in range(8)]
+    assert all(item["investor_ids"] for item in subtasks)
 
 
 def test_subtask_failure_retries_then_fails(monkeypatch, tmp_path) -> None:

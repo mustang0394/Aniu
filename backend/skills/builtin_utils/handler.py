@@ -10,7 +10,7 @@ import socket
 import subprocess
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 
@@ -19,6 +19,7 @@ from app.skills.context import get_skill_runtime_paths
 
 
 _DEFAULT_HTTP_TIMEOUT = 30.0
+_MAX_WEB_REDIRECTS = 5
 _MAX_EXEC_TIMEOUT = 60
 _DEFAULT_READ_LIMIT = 500
 _MAX_READ_CHARS = 128_000
@@ -295,6 +296,7 @@ def _validate_remote_url(url: str) -> str | None:
             or ip.is_link_local
             or ip.is_reserved
             or ip.is_multicast
+            or ip.is_unspecified
         ):
             return f"Blocked private or local address: {address}"
     return None
@@ -1128,13 +1130,29 @@ class Skill(BaseSkill):
         url = str(arguments.get("url") or "").strip()
         if not url:
             return _tool_error("web_fetch", "Missing url argument.")
-        validation_error = _validate_remote_url(url)
-        if validation_error:
-            return _tool_error("web_fetch", validation_error)
         timeout = float(arguments.get("timeout") or _DEFAULT_HTTP_TIMEOUT)
         try:
-            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                response = client.get(url, headers={"User-Agent": "Aniu/1.0"})
+            current_url = url
+            with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+                for _redirect_index in range(_MAX_WEB_REDIRECTS + 1):
+                    validation_error = _validate_remote_url(current_url)
+                    if validation_error:
+                        return _tool_error("web_fetch", validation_error)
+                    response = client.get(
+                        current_url,
+                        headers={"User-Agent": "Aniu/1.0"},
+                    )
+                    if response.status_code not in {301, 302, 303, 307, 308}:
+                        break
+                    location = str(response.headers.get("location") or "").strip()
+                    if not location:
+                        break
+                    current_url = urljoin(current_url, location)
+                else:
+                    return _tool_error(
+                        "web_fetch",
+                        f"Too many redirects (maximum {_MAX_WEB_REDIRECTS}).",
+                    )
             response.raise_for_status()
             content_type = str(response.headers.get("content-type", "")).lower()
             text = response.text or ""
@@ -1142,9 +1160,9 @@ class Skill(BaseSkill):
             text, truncated = _truncate_text(text.strip(), limit=_MAX_WEB_TEXT_CHARS)
             return _tool_ok(
                 "web_fetch",
-                f"Fetched {url}",
+                f"Fetched {current_url}",
                 {
-                    "url": url,
+                    "url": current_url,
                     "status_code": response.status_code,
                     "content_type": response.headers.get("content-type"),
                     "content": (

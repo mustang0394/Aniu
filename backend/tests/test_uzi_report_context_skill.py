@@ -179,6 +179,10 @@ def test_report_id_ticker_conflict(monkeypatch, tmp_path) -> None:
         # 一致的 ticker 允许通过。
         ok_result = _invoke(_skill(), report_id=report_id, ticker="600519.SH")
         assert ok_result["ok"] is True
+
+        # 同时提供 report_id 时也允许使用报告公司名作为 ticker 查询键。
+        by_company = _invoke(_skill(), report_id=report_id, ticker="贵州茅台")
+        assert by_company["ok"] is True
     finally:
         _cleanup_db()
 

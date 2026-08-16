@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 import logging
@@ -45,19 +46,33 @@ async def app_lifespan(_app: FastAPI):
             logger.warning("UZI 启动对账失败（继续启动）: %s", exc)
     today = date.today()
     next_month_date = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+    calendar_task = asyncio.create_task(
+        _warm_trading_calendar(
+            [
+                f"{today.year}-{today.month:02d}",
+                f"{next_month_date.year}-{next_month_date.month:02d}",
+            ]
+        )
+    )
     try:
-        trading_calendar_service.ensure_months([
-            f"{today.year}-{today.month:02d}",
-            f"{next_month_date.year}-{next_month_date.month:02d}",
-        ])
-    except Exception as exc:
-        logger.warning("trading calendar warm up skipped: %s", exc)
-    scheduler_service.start()
-    try:
+        scheduler_service.start()
         yield
     finally:
         scheduler_service.stop()
         uzi_report_service.stop()
+        if not calendar_task.done():
+            calendar_task.cancel()
+        await asyncio.gather(calendar_task, return_exceptions=True)
+
+
+async def _warm_trading_calendar(month_keys: list[str]) -> None:
+    """后台预热交易日历，避免外部接口阻塞应用启动。"""
+    try:
+        await asyncio.to_thread(trading_calendar_service.ensure_months, month_keys)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("trading calendar warm up skipped: %s", exc)
 
 
 def create_app() -> FastAPI:

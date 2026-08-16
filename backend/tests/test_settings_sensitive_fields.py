@@ -10,7 +10,7 @@ def test_settings_telegram_fields_are_not_masked(monkeypatch, tmp_path) -> None:
     from app.services.trading_calendar_service import trading_calendar_service
 
     monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "tg_fields.db"))
-    monkeypatch.setattr(trading_calendar_service, "ensure_years", lambda years: None)
+    monkeypatch.setattr(trading_calendar_service, "ensure_months", lambda keys: None)
     get_settings.cache_clear()
     database_module._engine = None
     database_module._session_local = None

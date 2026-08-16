@@ -1,5 +1,5 @@
 # 直接依赖声明（Worker 独立环境，禁止混入主后端 requirements.txt）。
-# 上游 UZI 所需的 AkShare / Pandas / Playwright 只允许出现在本文件。
+# UZI Stage 1/2 所需的 AkShare / Pandas / Playwright 只允许出现在本文件。
 #
 # 锁定与隔离要求（文档 §19.2）：
 #   cd backend/uzi_worker
@@ -9,23 +9,23 @@
 #     ./.venv/bin/python -m playwright install chromium
 #
 # 注意：禁止在宿主机执行 `playwright install --with-deps`。
+
+# Worker 自身 API 依赖
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 httpx>=0.27.0
 pydantic>=2.7.0
 
-# UZI Stage 1/2 运行依赖（对齐上游 requirements.txt，AkShare 会带来 pandas 等传递依赖）。
+# UZI Stage 1/2 运行依赖（对齐上游 requirements.txt）
 akshare>=1.14.0
 yfinance>=0.2.40
-baostock>=0.9.1    # K 线 fallback（官方接口，无需 key）
+baostock>=0.9.1
 pandas>=2.0.0
 requests>=2.31.0
-ddgs>=9.0.0       # 定性维度兼底搜索
-mplfinance>=0.12.10b0  # K 线 PNG 出图
-rich>=13.0.0      # 颜色与格式
-
-# 报告渲染使用 Playwright + Chromium（镜像构建阶段安装，运行时禁止下载）。
-playwright>=1.44.0
+ddgs>=9.0.0
+mplfinance>=0.12.10b0
+playwright>=1.42.0
+rich>=13.0.0
 
 # 测试
 pytest>=8.0.0

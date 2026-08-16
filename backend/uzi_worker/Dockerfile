@@ -30,13 +30,8 @@ COPY uzi-source.lock /opt/uzi-source.lock
 ARG UZI_ALLOW_MISSING_SHA256=0
 RUN set -eux; \
     curl -fsSL "${UZI_ARCHIVE_URL}" -o /opt/uzi.tar.gz; \
-    SHA256_EXPECTED="$(python3 - <<'PY'
-import json
-payload = json.load(open('/opt/uzi-source.lock'))
-print(payload.get('sha256') or '')
-PY
-)"; \
     ACTUAL_SHA256="$(sha256sum /opt/uzi.tar.gz | awk '{print $1}')"; \
+    SHA256_EXPECTED="$(python3 -c 'import json,sys; print(json.load(open("/opt/uzi-source.lock")).get("sha256") or "")')"; \
     if [ -n "${SHA256_EXPECTED}" ]; then \
         echo "${SHA256_EXPECTED}  /opt/uzi.tar.gz" | sha256sum -c -; \
     else \

@@ -1,0 +1,24 @@
+# 锁定依赖（初始手写版本基线，对齐上游 requirements.txt）。
+#
+# 本文件为初始锁定版本，供镜像构建与联调使用；正式合入前请在 Worker
+# 独立 venv 中通过 pip-compile 重新生成精确锁定（文档 §19.2：锁文件生成
+# 工具只能安装在临时或 Worker 虚拟环境中，不得安装到系统 Python）。
+fastapi==0.111.1
+uvicorn[standard]==0.30.6
+httpx==0.27.2
+pydantic==2.8.2
+
+# UZI Stage 1/2 运行依赖（对齐上游 requirements.txt）
+akshare==1.14.75
+yfinance==0.2.40
+baostock==0.9.1
+pandas==2.2.2
+requests==2.32.3
+ddgs==9.1.0
+mplfinance==0.12.10b0
+rich==13.7.1
+
+# 报告渲染使用 Playwright + Chromium（镜像构建阶段安装，运行时禁止下载）。
+playwright==1.45.1
+
+pytest==8.3.2

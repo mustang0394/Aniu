@@ -25,6 +25,16 @@ const router = createRouter({
       component: () => import('@/views/TasksView.vue')
     },
     {
+      path: '/uzi-reports',
+      name: 'uzi-reports',
+      component: () => import('@/views/UziReportsView.vue')
+    },
+    {
+      path: '/uzi-reports/:reportId',
+      name: 'uzi-report-detail',
+      component: () => import('@/views/UziReportDetailView.vue')
+    },
+    {
       path: '/chat',
       name: 'chat',
       component: () => import('@/views/ChatView.vue')

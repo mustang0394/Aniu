@@ -44,6 +44,29 @@ class Settings(BaseSettings):
     app_login_password: str | None = Field(default=None, alias="APP_LOGIN_PASSWORD")
     jwt_secret: str | None = Field(default=None, alias="JWT_SECRET")
     jwt_expire_hours: int = Field(default=24, alias="JWT_EXPIRE_HOURS")
+
+    # ── UZI 深度报告模块（部署基础设施，文档 §8）──
+    uzi_enabled: bool = Field(default=True, alias="UZI_ENABLED")
+    uzi_worker_url: str = Field(
+        default="http://aniu-uzi-worker:9001", alias="UZI_WORKER_URL"
+    )
+    uzi_worker_shared_secret: str | None = Field(
+        default=None, alias="UZI_WORKER_SHARED_SECRET"
+    )
+    uzi_report_root: Path = Field(
+        default=Path("/app/data/uzi_reports"), alias="UZI_REPORT_ROOT"
+    )
+    uzi_max_active: int = Field(default=1, alias="UZI_MAX_ACTIVE")
+    uzi_max_queued: int = Field(default=3, alias="UZI_MAX_QUEUED")
+    uzi_job_timeout_seconds: int = Field(
+        default=3600, alias="UZI_JOB_TIMEOUT_SECONDS"
+    )
+    uzi_poll_interval_seconds: int = Field(
+        default=2, alias="UZI_POLL_INTERVAL_SECONDS"
+    )
+    uzi_create_rate_limit_seconds: int = Field(
+        default=60, alias="UZI_CREATE_RATE_LIMIT_SECONDS"
+    )
     trust_x_forwarded_for: bool = Field(
         default=False,
         alias="TRUST_X_FORWARDED_FOR",
@@ -57,6 +80,7 @@ class Settings(BaseSettings):
         "openai_base_url",
         "openai_api_key",
         "app_login_password",
+        "uzi_worker_shared_secret",
         mode="before",
     )
     @classmethod
@@ -89,6 +113,9 @@ def get_settings() -> Settings:
     if not settings.sqlite_db_path.is_absolute():
         settings.sqlite_db_path = Path.cwd() / settings.sqlite_db_path
     settings.sqlite_db_path = settings.sqlite_db_path.resolve()
+    if not settings.uzi_report_root.is_absolute():
+        settings.uzi_report_root = Path.cwd() / settings.uzi_report_root
+    settings.uzi_report_root = settings.uzi_report_root.resolve()
 
     configured_db_path = settings.sqlite_db_path
     default_db_path = Path.cwd() / "data" / "aniu.sqlite3"

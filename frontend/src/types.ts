@@ -351,3 +351,149 @@ export interface SkillInfo {
   clawhub_url: string | null
   published_at: string | null
 }
+
+// ── UZI 深度报告（文档 §15.5 / §9.1 / §10）────────────────────────
+
+export type UziReportStatus =
+  | 'queued'
+  | 'stage1_running'
+  | 'llm_review'
+  | 'stage2_running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export const UZI_TERMINAL_STATUSES: readonly UziReportStatus[] = [
+  'completed',
+  'failed',
+  'cancelled',
+]
+
+export interface UziStatus {
+  enabled: boolean
+  worker_available: boolean
+  worker_version: string | null
+  active_jobs: number
+  queued_jobs: number
+  max_queued: number
+  reason: string | null
+}
+
+/** 标准化摘要（文档 §9.1）：字段允许为空但不允许随意改名。 */
+export interface UziValuationSummary {
+  rating: string
+  target_price: number
+  upside_pct: number
+  methods: string[]
+}
+
+export interface UziPanelSummary {
+  bullish: number
+  neutral: number
+  bearish: number
+  key_disagreements: string[]
+}
+
+export interface UziDataGapsSummary {
+  coverage_pct: number
+  unresolved: number
+  items: string[]
+}
+
+export interface UziSummaryPayload {
+  schema_version: number
+  ticker: string
+  company_name: string
+  overall_score: number
+  verdict: string
+  one_liner: string
+  valuation: UziValuationSummary
+  risks: string[]
+  catalysts: string[]
+  panel: UziPanelSummary
+  qualitative: Record<string, unknown>
+  data_gaps: UziDataGapsSummary
+  sources: string[]
+  data_as_of: string
+  generated_at: string
+  disclaimer: string
+}
+
+export interface UziReportSummary {
+  id: number
+  ticker_input: string
+  ticker_normalized: string | null
+  company_name: string | null
+  status: UziReportStatus
+  progress: number
+  overall_score: number | null
+  verdict: string | null
+  llm_model: string | null
+  created_at: string
+  finished_at: string | null
+  data_as_of: string | null
+}
+
+export type UziArtifactKey =
+  | 'html'
+  | 'share_card'
+  | 'war_report'
+  | 'meta'
+  | 'one_liner'
+  | 'synthesis'
+
+export interface UziReportArtifact {
+  key: UziArtifactKey
+  file: string
+  size: number
+  mime: string
+}
+
+export interface UziReportDetail extends UziReportSummary {
+  phase: string | null
+  progress_message: string | null
+  error_code: string | null
+  error_message: string | null
+  uzi_commit: string | null
+  llm_reasoning_effort: string | null
+  summary: UziSummaryPayload | null
+  artifacts: UziReportArtifact[]
+}
+
+export interface UziReportListResponse {
+  items: UziReportSummary[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type UziReportEventType =
+  | 'snapshot'
+  | 'status_changed'
+  | 'progress'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'heartbeat'
+
+export interface UziReportEvent {
+  type: UziReportEventType
+  report_id: number
+  ts?: number
+  from?: string
+  to?: string
+  status?: string
+  phase?: string | null
+  progress?: number
+  message?: string | null
+  job?: UziReportDetail | null
+}
+
+export interface CreateUziReportRequest {
+  ticker: string
+}
+
+export interface CreateUziReportResponse {
+  report: UziReportSummary
+  reused: boolean
+}

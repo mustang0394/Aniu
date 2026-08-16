@@ -230,3 +230,43 @@ class ChatAttachment(Base):
     size: Mapped[int] = mapped_column(Integer, default=0)
     storage_path: Mapped[str] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class UziReportJob(Base):
+    """UZI 深度报告任务（文档 §9）。
+
+    状态机见文档 §6：queued → stage1_running → llm_review → stage2_running
+    → completed；任一非终态都可进入 failed / cancelled。禁止状态倒退，
+    重试必须创建新任务。
+    """
+
+    __tablename__ = "uzi_report_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_input: Mapped[str] = mapped_column(String(64))
+    ticker_normalized: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    company_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    phase: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    progress_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    uzi_commit: Mapped[str] = mapped_column(String(40), default="")
+    llm_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    llm_reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    data_as_of: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    artifact_manifest_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    report_rel_dir: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )

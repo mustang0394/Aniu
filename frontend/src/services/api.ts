@@ -1,4 +1,4 @@
-import type { AccountOverview, AppSettings, ChatAttachment, ChatRequest, ChatResponse, ChatSession, ChatSessionMessagesPayload, LoginRequest, LoginResponse, PersistentSession, PersistentSessionMessagesPayload, RawToolPreviewDetail, RunDetail, RunSummary, RunSummaryPage, RuntimeOverview, ScheduleConfig, SkillInfo, SkillListItem } from '../types.ts'
+import type { AccountOverview, AppSettings, ChatAttachment, ChatRequest, ChatResponse, ChatSession, ChatSessionMessagesPayload, CreateUziReportRequest, CreateUziReportResponse, LoginRequest, LoginResponse, PersistentSession, PersistentSessionMessagesPayload, RawToolPreviewDetail, RunDetail, RunSummary, RunSummaryPage, RuntimeOverview, ScheduleConfig, SkillInfo, SkillListItem, UziReportDetail, UziReportListResponse, UziReportStatus, UziStatus } from '../types.ts'
 import {
   LOGIN_NOTICE_STORAGE_KEY,
   LOGIN_REDIRECT_STORAGE_KEY,
@@ -204,6 +204,13 @@ async function buildErrorMessage(response: Response): Promise<string> {
   } catch {
     return message
   }
+}
+
+interface ListUziReportsOptions {
+  limit?: number
+  offset?: number
+  ticker?: string
+  status?: UziReportStatus
 }
 
 export const api = {
@@ -457,5 +464,59 @@ export const api = {
   },
   chatAttachmentUrl(attachmentId: number) {
     return `${API_PREFIX}/chat/uploads/${attachmentId}`
+  },
+  // ── UZI 深度报告（文档 §10）────────────────────────
+  getUziStatus() {
+    return request<UziStatus>(`${API_PREFIX}/uzi/status`)
+  },
+  createUziReport(payload: CreateUziReportRequest) {
+    return request<CreateUziReportResponse>(`${API_PREFIX}/uzi/reports`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      timeoutMs: 30 * 1000,
+    })
+  },
+  listUziReports(options: ListUziReportsOptions = {}) {
+    const params = new URLSearchParams()
+    params.set('limit', String(options.limit ?? 20))
+    params.set('offset', String(options.offset ?? 0))
+    if (options.ticker) {
+      params.set('ticker', options.ticker)
+    }
+    if (options.status) {
+      params.set('status', options.status)
+    }
+    return request<UziReportListResponse>(`${API_PREFIX}/uzi/reports?${params.toString()}`)
+  },
+  getUziReport(reportId: number) {
+    return request<UziReportDetail>(`${API_PREFIX}/uzi/reports/${reportId}`)
+  },
+  uziReportEventsUrl(reportId: number) {
+    return `${API_PREFIX}/uzi/reports/${reportId}/events`
+  },
+  cancelUziReport(reportId: number) {
+    return request<{ id: number; status: UziReportStatus; cancelled: boolean }>(
+      `${API_PREFIX}/uzi/reports/${reportId}/cancel`,
+      { method: 'POST' },
+    )
+  },
+  deleteUziReport(reportId: number) {
+    return request<void>(`${API_PREFIX}/uzi/reports/${reportId}`, {
+      method: 'DELETE',
+    })
+  },
+  async fetchUziReportArtifactBlob(reportId: number, artifactKey: string): Promise<Blob> {
+    const response = await fetchWithTimeout(
+      `${API_PREFIX}/uzi/reports/${reportId}/artifacts/${encodeURIComponent(artifactKey)}`,
+      {
+        method: 'GET',
+        timeoutMs: 60 * 1000,
+        setJsonContentType: false,
+      },
+    )
+    if (!response.ok) {
+      throw new Error(await buildErrorMessage(response))
+    }
+    return response.blob()
   },
 }

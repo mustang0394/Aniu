@@ -19,7 +19,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ghcr.io/Mustang0394/aniu
+  IMAGE_NAME: ghcr.io/mustang0394/aniu
+  WORKER_IMAGE_NAME: ghcr.io/mustang0394/aniu-uzi-worker
 
 jobs:
   build-and-push:
@@ -43,8 +44,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
+      # 主镜像元数据（文档 §18.2：主镜像与 Worker 镜像使用同一套标签）
+      - name: Extract Docker metadata (main)
+        id: meta-main
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
@@ -57,24 +59,54 @@ jobs:
           labels: |
             org.opencontainers.image.title=Aniu
             org.opencontainers.image.description=AI simulated trading platform using the East Money Miaoxiang interface
-            org.opencontainers.image.source=https://github.com/Mustang0394/Aniu
+            org.opencontainers.image.source=https://github.com/mustang0394/Aniu
             org.opencontainers.image.licenses=MIT
 
-      - name: Build and push image
+      # Worker 镜像元数据：与主镜像相同的标签规则，保持版本一致
+      - name: Extract Docker metadata (worker)
+        id: meta-worker
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.WORKER_IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=short
+            type=raw,value=${{ inputs.custom_tag }},enable=${{ inputs.custom_tag != '' }}
+          labels: |
+            org.opencontainers.image.title=Aniu UZI Worker
+            org.opencontainers.image.description=UZI deep research worker for AniU (isolated runtime)
+            org.opencontainers.image.source=https://github.com/mustang0394/Aniu
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push main image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-main.outputs.tags }}
+          labels: ${{ steps.meta-main.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: ${{ github.event_name == 'workflow_dispatch' && !inputs.push_image }}
 
-      - name: Verify image
+      - name: Build and push worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend/uzi_worker
+          file: ./backend/uzi_worker/Dockerfile
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
+          tags: ${{ steps.meta-worker.outputs.tags }}
+          labels: ${{ steps.meta-worker.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: ${{ github.event_name == 'workflow_dispatch' && !inputs.push_image }}
+
+      - name: Verify images
         if: github.event_name == 'workflow_dispatch' && !inputs.push_image
-        run: docker images --filter "reference=${{ env.IMAGE_NAME }}*"
+        run: docker images --filter "reference=${{ env.IMAGE_NAME }}*" --filter "reference=${{ env.WORKER_IMAGE_NAME }}*"
 
   create-release:
     if: startsWith(github.ref, 'refs/tags/v')

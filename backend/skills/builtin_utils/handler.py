@@ -523,7 +523,7 @@ class Skill(BaseSkill):
     id = "builtin_utils"
     name = "通用技能运行时"
     description = "Shared read/write/search/web/shell runtime that supports document-driven skills."
-    run_types = ["analysis", "trade", "chat"]
+    run_types = ["analysis", "trade", "chat", "uzi_analysis"]
     tools = _TOOLS
 
     def _http_headers(self, headers: Any) -> dict[str, str] | None:

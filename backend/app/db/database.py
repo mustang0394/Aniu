@@ -49,6 +49,7 @@ def init_db() -> None:
     _ensure_chat_session_indexes(engine)
     _ensure_chat_message_indexes(engine)
     _ensure_strategy_run_indexes(engine)
+    _ensure_uzi_report_job_indexes(engine)
     _backfill_schedule_run_types(engine)
     _backfill_strategy_run_types(engine)
 
@@ -401,6 +402,44 @@ def _ensure_strategy_run_indexes(engine) -> None:
     if "ix_strategy_runs_schedule_id" not in index_names:
         statements.append(
             "CREATE INDEX ix_strategy_runs_schedule_id ON strategy_runs (schedule_id)"
+        )
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def _ensure_uzi_report_job_indexes(engine) -> None:
+    """UZI 报告任务表索引（文档 §9）。
+
+    新表由 ``Base.metadata.create_all`` 创建；索引同样由 ORM 的
+    ``index=True`` 声明创建，这里仅作为幂等的内联迁移兜底，
+    保证旧库（若曾手工建表）也能补齐索引。
+    """
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "uzi_report_jobs" not in table_names:
+        return
+
+    index_names = {
+        index["name"]
+        for index in inspector.get_indexes("uzi_report_jobs")
+        if index.get("name")
+    }
+
+    statements: list[str] = []
+    if "ix_uzi_report_jobs_ticker_normalized_created_at" not in index_names:
+        statements.append(
+            "CREATE INDEX ix_uzi_report_jobs_ticker_normalized_created_at "
+            "ON uzi_report_jobs (ticker_normalized, created_at)"
+        )
+    if "ix_uzi_report_jobs_status_created_at" not in index_names:
+        statements.append(
+            "CREATE INDEX ix_uzi_report_jobs_status_created_at "
+            "ON uzi_report_jobs (status, created_at)"
         )
 
     if not statements:

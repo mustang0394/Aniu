@@ -17,7 +17,7 @@ class Skill(BaseSkill):
     id = "mx_core"
     name = "妙想核心"
     description = "东方财富妙想 OpenAPI 与 A 股模拟交易工具集"
-    run_types = ["analysis", "trade", "chat"]
+    run_types = ["analysis", "trade", "chat", "uzi_analysis"]
 
     def __init__(self) -> None:
         self.tools = _load_specs()

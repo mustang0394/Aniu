@@ -83,6 +83,10 @@ TOOL_PROFILES: dict[str, set[str]] = {
     "analysis": set(COMMON_TOOL_NAMES),
     "trade": {*COMMON_TOOL_NAMES, *TRADE_TOOL_NAMES},
     "chat": {*COMMON_TOOL_NAMES, *TRADE_TOOL_NAMES},
+    # UZI 深度评审内部运行类型（文档 §13.2）：只读查询，绝无交易/写操作。
+    # 这不是计划任务或前端可选运行类型；工具列表交给 UziLlmOrchestrator
+    # 的第二层硬过滤（UZI_LLM_ALLOWED_TOOLS）再次收窄。
+    "uzi_analysis": {"mx_query_market", "mx_search_news"},
 }
 
 

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.router import router as aniu_router
+from app.api.uzi_router import router as uzi_router
 from app.core.config import get_settings
 from app.core.rate_limit import rate_limit_middleware
 from app.db.database import init_db
@@ -19,6 +20,7 @@ from app.db.database import session_scope
 from app.services.scheduler_service import scheduler_service
 from app.services.skill_admin_service import skill_admin_service
 from app.services.trading_calendar_service import trading_calendar_service
+from app.services.uzi_report_service import uzi_report_service
 from app.skills import skill_registry
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,14 @@ async def app_lifespan(_app: FastAPI):
     skill_registry.reload()
     with session_scope() as db:
         skill_admin_service.apply_persisted_state(db)
+    # UZI 执行器先启动，再对账（对账会入队恢复任务，必须先 start 否则被丢弃）。
+    uzi_report_service.start()
+    with session_scope() as db:
+        # UZI 启动对账（§17.1）：Worker 不可用时不能让主服务启动失败（§18.3）。
+        try:
+            uzi_report_service.reconcile_on_startup(db)
+        except Exception as exc:
+            logger.warning("UZI 启动对账失败（继续启动）: %s", exc)
     today = date.today()
     next_month_date = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
     try:
@@ -47,6 +57,7 @@ async def app_lifespan(_app: FastAPI):
         yield
     finally:
         scheduler_service.stop()
+        uzi_report_service.stop()
 
 
 def create_app() -> FastAPI:
@@ -70,6 +81,7 @@ def create_app() -> FastAPI:
     app.add_middleware(BaseHTTPMiddleware, dispatch=rate_limit_middleware)
 
     app.include_router(aniu_router)
+    app.include_router(uzi_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

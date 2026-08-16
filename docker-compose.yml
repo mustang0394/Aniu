@@ -1,6 +1,6 @@
 services:
   aniu:
-    image: ghcr.io/anacondakc/aniu:${ANIU_IMAGE_TAG:-latest}
+    image: ghcr.io/mustang0394/aniu:${ANIU_IMAGE_TAG:-latest}
     container_name: aniu
     restart: unless-stopped
     ports:
@@ -9,3 +9,52 @@ services:
       - .env.docker
     volumes:
       - ./data:/app/data
+    # UZI 相关变量（UZI_ENABLED / UZI_WORKER_URL / UZI_WORKER_SHARED_SECRET /
+    # UZI_REPORT_ROOT 等）随 env_file 自动注入，无需在此重复声明。
+    # 兼容性：即使 aniu-uzi-worker 未配置或不可用，主服务也能正常启动
+    # （文档 §18.3），UZI 菜单保留但生成按钮禁用。
+
+  aniu-uzi-worker:
+    image: ghcr.io/Mustang0394/aniu-uzi-worker:${ANIU_IMAGE_TAG:-latest}
+    container_name: aniu-uzi-worker
+    restart: unless-stopped
+    build:
+      context: ./backend/uzi_worker
+      dockerfile: Dockerfile
+    env_file:
+      - .env.docker
+    environment:
+      # 内部 API 共享密钥：必须与主服务 UZI_WORKER_SHARED_SECRET 一致。
+      # compose 变量插值来自根目录 .env 或 shell 导出；未设置时 Worker
+      # 除健康检查外拒绝一切任务（安全默认，不提供弱值，文档 §8）。
+      UZI_WORKER_TOKEN: ${UZI_WORKER_SHARED_SECRET:-}
+      UZI_SOURCE_ROOT: /opt/uzi
+      UZI_REPORT_ROOT: /app/data/uzi_reports
+      UZI_WORKER_PORT: "9001"
+      UZI_DEPTH: deep
+      UZI_LITE: "0"
+      UZI_NO_AUTO_OPEN: "1"
+      UZI_PLAYWRIGHT_ENABLE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # 与主服务共享报告目录（Worker 写产物，主服务读并入库）。
+      - ./data:/app/data
+    # 不映射任何端口到宿主机（文档 §18.1：Worker 只允许 Docker 内部访问）。
+    # 说明：Worker 的 Stage 1 数据采集需要访问外部网络（行情/网页），
+    # 因此使用 compose 默认网络而非 internal:true；对外不发布端口，
+    # 主服务通过服务名 http://aniu-uzi-worker:9001 访问。
+    healthcheck:
+      # 健康检查豁免 Token（文档 §11.1），与 Worker Dockerfile 内置一致。
+      test: ["CMD", "python3", "-c", "import json, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:9001/internal/health', timeout=4)); assert data['status'] == 'ok'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    deploy:
+      # 资源限制：不宜过小，避免 Pandas / Chromium OOM（文档 §18.1）。
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4g
+        reservations:
+          memory: 1g

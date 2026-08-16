@@ -85,6 +85,9 @@ _ROUTE_LIMITS: tuple[tuple[str, tuple[str, ...], tuple[str, ...], float, int], .
         10,
     ),
 )
+# 注：UZI 报告创建的限流在 ``UziReportService.create_report`` 内以软限流实现
+# （§8/§10.2），复用活动任务不消耗配额；此处不再加中间件硬限流，避免
+# 短时间内合法的「同股票复用」请求被 429 拦截。
 
 
 def _match_route_limit(path: str) -> tuple[str, float, int] | None:

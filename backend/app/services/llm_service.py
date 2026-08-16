@@ -1984,5 +1984,88 @@ class LLMService:
             raise RuntimeError(f"大模型接口请求失败: {exc}") from exc
         return response.json()
 
+    def run_structured_json_call(
+        self,
+        *,
+        model: str,
+        base_url: str,
+        api_key: str,
+        system_prompt: str | None,
+        user_prompt: str,
+        timeout_seconds: int = 90,
+        reasoning_effort: str | None = None,
+        max_retries: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """UZI 受限结构化 JSON 分析入口（文档 §7.1 / §13.1 / §13.4）。
+
+        - 强制 ``response_format={"type": "json_object"}``，要求模型输出 JSON。
+        - 复用 ``_call_llm_stream`` 的流式解析与 include_usage 400 兼容逻辑，
+          并按 ``max_retries``（来自 AppSettings）做指数退避重试。
+        - 不注入交易 freshness 逻辑，不注入交易/分析/聊天执行提示词——
+          UZI 使用独立、版本化的研究提示词（由调用方提供）。
+        - 不记录 API Key，不记录隐藏推理（§16.3）。
+
+        返回 ``{"content": <json 文本>, "payload": <原始响应>}``。
+        """
+        budget = normalize_max_retries(max_retries)
+        messages: list[dict[str, Any]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+
+        last_error: BaseException | None = None
+        for attempt in range(budget + 1):
+            _raise_if_cancelled(cancel_event)
+            payload = self._apply_reasoning_effort(
+                {
+                    "model": model,
+                    "temperature": _LLM_TEMPERATURE,
+                    "messages": messages,
+                    "response_format": {"type": "json_object"},
+                },
+                reasoning_effort,
+            )
+            try:
+                response_payload = self._call_llm_stream(
+                    base_url=base_url,
+                    api_key=api_key,
+                    payload=payload,
+                    timeout_seconds=timeout_seconds,
+                    cancel_event=cancel_event,
+                )
+            except LLMStreamCancelled:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if attempt >= budget:
+                    raise _annotate_retry_exhaustion(exc, attempt) from exc
+                delay = _retry_delay_seconds(attempt)
+                logger.warning(
+                    "UZI structured JSON call attempt %s/%s failed (%s); retrying in %.2fs",
+                    attempt + 1,
+                    budget + 1,
+                    exc,
+                    delay,
+                )
+                _sleep_with_cancel(delay, cancel_event)
+                continue
+
+            choices = response_payload.get("choices") or []
+            if not choices:
+                raise RuntimeError("大模型未返回 choices。")
+            message = choices[0].get("message") or {}
+            content = _to_text_content(message.get("content"))
+            if not content.strip():
+                raise RuntimeError("大模型返回空内容，视为无效。")
+            return {
+                "content": content,
+                "payload": response_payload,
+            }
+
+        if last_error is not None:
+            raise _annotate_retry_exhaustion(last_error, budget)
+        raise RuntimeError("大模型结构化调用失败。")
+
 
 llm_service = LLMService()

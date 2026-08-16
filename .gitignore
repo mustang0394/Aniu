@@ -15,6 +15,13 @@ backend/.pytest_cache/
 *.pyc
 *.pyo
 
+# ── UZI Worker（独立 venv / 浏览器 / 缓存，禁止提交）──
+backend/uzi_worker/.venv/
+backend/uzi_worker/.playwright/
+backend/uzi_worker/.cache/
+backend/uzi_worker/work/
+backend/uzi_worker/.pytest_cache/
+
 # ── Node / Frontend ───────────────────────────────────
 frontend/node_modules/
 frontend/dist/

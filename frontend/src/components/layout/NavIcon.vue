@@ -33,6 +33,14 @@
       <path d="M9 16h4" />
     </g>
 
+    <!-- uzi: report document with search lens (文件 + 放大镜) -->
+    <g v-else-if="name === 'uzi'">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 2v6h6" />
+      <circle cx="11.6" cy="14.6" r="2.6" />
+      <path d="m13.6 16.6 2.6 2.6" />
+    </g>
+
     <!-- chat: rounded bubble, geometric center ≈ (12, 11.5) -->
     <g v-else-if="name === 'chat'">
       <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />

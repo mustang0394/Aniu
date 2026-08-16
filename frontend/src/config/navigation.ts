@@ -1,6 +1,7 @@
 export type AppNavIcon =
   | 'overview'
   | 'tasks'
+  | 'uzi'
   | 'chat'
   | 'schedule'
   | 'settings'
@@ -15,6 +16,7 @@ export interface AppNavItem {
 export const appNavigation: AppNavItem[] = [
   { id: 'overview', name: '总览', path: '/overview', icon: 'overview' },
   { id: 'tasks', name: 'AI分析', path: '/tasks', icon: 'tasks' },
+  { id: 'uzi', name: 'UZI报告', path: '/uzi-reports', icon: 'uzi' },
   { id: 'chat', name: 'AI聊天', path: '/chat', icon: 'chat' },
   { id: 'schedule', name: '定时设置', path: '/schedule', icon: 'schedule' },
   { id: 'settings', name: '功能设置', path: '/settings', icon: 'settings' },

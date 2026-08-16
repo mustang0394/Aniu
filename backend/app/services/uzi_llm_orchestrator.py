@@ -47,13 +47,17 @@ ERROR_AGENT_ANALYSIS_INVALID = "UZI_AGENT_ANALYSIS_INVALID"
 UZI_RUN_TYPE = "uzi_analysis"
 
 # 第二层硬过滤 allowlist（§13.2）：工具列表构建后只保留此集合。
+# UZI LLM 允许工具集（§13.2 双重 allowlist）。
+# 安全说明（P0 SSRF 修复）：不包含 ``http_get``——builtin_utils.http_get
+# 未调用 ``_validate_remote_url``、允许自定义 headers 且自动跟随重定向，
+# LLM 提示注入后可访问 Worker/Docker/云元数据/内网服务（127.0.0.1 等）。
+# 保留 ``web_fetch``：它已有严格的 URL/DNS/重定向/private-IP 校验。
 UZI_LLM_ALLOWED_TOOLS: frozenset[str] = frozenset(
     {
         "mx_query_market",
         "mx_search_news",
         "web_search",
         "web_fetch",
-        "http_get",
     }
 )
 
@@ -67,6 +71,7 @@ UZI_LLM_FORBIDDEN_TOOLS: frozenset[str] = frozenset(
         "edit_file",
         "exec",
         "http_post",
+        "http_get",
     }
 )
 
@@ -198,6 +203,15 @@ class UziLlmOrchestrator:
         from app.services.llm_service import llm_service as default_llm_service
 
         self._llm: LLMService = llm_service or default_llm_service
+        self._deadline: float | None = None
+
+    def _check_deadline(self) -> None:
+        """子任务检查点：超过总 deadline 立即中止（§13.5 / review P1 超时）。"""
+        if self._deadline is not None and time.monotonic() > self._deadline:
+            raise UziReviewError(
+                ERROR_LLM_REVIEW_FAILED,
+                "LLM 评审超时（超过 UZI_JOB_TIMEOUT_SECONDS）。",
+            )
 
     # ── 工具层（§13.2 双重 allowlist）────────────────────
     def build_tools(self) -> list[dict[str, Any]]:
@@ -241,13 +255,18 @@ class UziLlmOrchestrator:
         report_root: Path | None = None,
         progress: Callable[[int, str], None] | None = None,
         cancel_event: threading.Event | None = None,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         """执行 UZI LLM 深度评审，写入 work/agent_analysis.json。
 
         返回包含 ``agent_analysis`` 与统计信息的 dict。
         失败抛 ``UziReviewError``（携带稳定错误码）。
+
+        ``deadline``（可选）：monotonic 时间戳，到达后任何子任务/重试
+        检查点都会中止评审并抛 ``UZI_LLM_REVIEW_FAILED``（超时）。
         """
         self._ensure_llm_config(app_settings)
+        self._deadline = deadline
 
         root = Path(report_root or get_settings().uzi_report_root).resolve()
         work_dir = root / str(report_id) / "work"
@@ -398,41 +417,81 @@ class UziLlmOrchestrator:
 
     # ── 子任务定义（§13.3）──────────────────────────────
     def _panel_subtasks(self, stage1: dict[str, Any]) -> list[dict[str, Any]]:
+        """投资者面板子任务（4 组），按上游 panel.json 真实字段分组。
+
+        上游 panel.json 真实结构：
+        - ``signal_distribution``：{bullish, neutral, bearish, skip}
+        - ``investors``：list，每项含 investor_id/name/group/signal/score/verdict
+        - ``school_scores``：dict，7 个流派各含 label/verdict/consensus
+        本函数按投资者 group/school 分配给 4 个面板子任务，不硬编码投资者姓名。
+        """
         panel = stage1.get("panel") or {}
-        categories = panel.get("categories") or panel.get("labels") or []
-        if isinstance(categories, list):
-            categories = [str(item) for item in categories if str(item).strip()]
-        category_text = "、".join(categories) if categories else "（由 Stage 1 提供）"
+        investors = panel.get("investors") or []
+        school_scores = panel.get("school_scores") or {}
+        sig_dist = panel.get("signal_distribution") or {}
+
+        # 收集上游流派标签，供子任务提示调使用
+        school_labels = []
+        if isinstance(school_scores, dict):
+            for _g, _sc in school_scores.items():
+                if isinstance(_sc, dict):
+                    label = str(_sc.get("label") or _g).strip()
+                    if label:
+                        school_labels.append(label)
+        schools_text = "、".join(school_labels) if school_labels else "（由 Stage 1 提供）"
+
+        # 按投资者 group 分组（不硬编码姓名，避免上游名单变动遗漏）
+        groups: dict[str, list[dict[str, Any]]] = {}
+        if isinstance(investors, list):
+            for inv in investors:
+                if not isinstance(inv, dict):
+                    continue
+                g = str(inv.get("group") or inv.get("school") or "other").strip() or "other"
+                groups.setdefault(g, []).append(inv)
+        group_names = sorted(groups.keys())
+        # 把流派名称附上，供提示词引用
+        group_text = "、".join(group_names) if group_names else schools_text
+
+        # 投资者总体统计摘要（供子任务上下文）
+        dist_text = (
+            f"多={sig_dist.get('bullish', 0)} "
+            f"中={sig_dist.get('neutral', 0)} "
+            f"空={sig_dist.get('bearish', 0)} "
+            f"弃={sig_dist.get('skip', 0)}"
+        ) if sig_dist else "（统计由 Stage 1 提供）"
+
         base = [
             {
                 "id": "panel_a",
                 "title": "投资者面板 A：价值、质量、现金流和估值方法",
                 "directives": (
-                    "评审价值、质量、现金流与估值方法；输出该面板类别"
-                    "的投资者观点分布与关键分歧。"
+                    "评审价值、质量、现金流与估值方法；输出该面板的投资"
+                    "者观点分布与关键分歧。必须输出 per_investor_override："
+                    "key 为 investor_id，value 含 signal/score/headline/reasoning。"
                 ),
             },
             {
                 "id": "panel_b",
                 "title": "投资者面板 B：成长、创新、行业空间和竞争优势",
                 "directives": (
-                    "评审成长性、创新、行业空间与竞争优势；输出该面板"
-                    "类别的投资者观点分布与关键分歧。"
+                    "评审成长创新、行业空间与竞争优势；输出该面板的投资者"
+                    "观点分布与关键分歧，填充 per_investor_override。"
                 ),
             },
             {
                 "id": "panel_c",
                 "title": "投资者面板 C：风险、做空、治理、财务异常和行为偏差",
                 "directives": (
-                    "评审风险、做空、治理、财务异常与行为偏差；输出该"
-                    "面板类别的投资者观点分布与关键分歧。"
+                    "评审风险、做空、治理、财务异常与行为偏差；输出该面板"
+                    "的投资者观点分布与关键分歧，填充 per_investor_override。"
                 ),
             },
             dict(_SUBTASK_PANEL_D),
         ]
         for subtask in base:
             subtask["kind"] = "panel"
-            subtask["categories"] = category_text
+            subtask["categories"] = group_text
+            subtask["signal_distribution"] = dist_text
         return base
 
     @staticmethod
@@ -619,6 +678,7 @@ class UziLlmOrchestrator:
 
         for _round in range(_MAX_SUBTASK_TOOL_ROUNDS):
             self._raise_if_cancelled(cancel_event)
+            self._check_deadline()
             payload = {
                 "model": app_settings.llm_model,
                 "temperature": 0.2,
@@ -795,11 +855,25 @@ class UziLlmOrchestrator:
         manifest = stage1.get("manifest") or {}
         panel = stage1.get("panel") or {}
         data_gaps = stage1.get("data_gaps") or {}
+        # 投资者统计：上游 panel.json 用 signal_distribution（不是扁平 bullish/neutral/bearish）
+        sig_dist = panel.get("signal_distribution") or {}
         panel_counts = {
-            "bullish": int(panel.get("bullish") or 0),
-            "neutral": int(panel.get("neutral") or 0),
-            "bearish": int(panel.get("bearish") or 0),
+            "bullish": int(sig_dist.get("bullish") or 0),
+            "neutral": int(sig_dist.get("neutral") or 0),
+            "bearish": int(sig_dist.get("bearish") or 0),
         }
+        # per_investor_override：从面板子任务结果汇总，上游 generate_synthesis 会据此
+        # 覆盖 panel.json 的投资者卡片（signal/score/headline/reasoning/comment/verdict）。
+        # 这是 LLM 评审真正接入上游报告的关键字段（review 问题5）。
+        per_investor_override: dict[str, Any] = {}
+        for _sub_id, _result in panel_results.items():
+            if not isinstance(_result, dict):
+                continue
+            _pio = _result.get("per_investor_override")
+            if isinstance(_pio, dict):
+                for _inv_id, _ov in _pio.items():
+                    if isinstance(_ov, dict):
+                        per_investor_override[str(_inv_id)] = _ov
         agent_analysis: dict[str, Any] = {
             "agent_reviewed": True,
             "schema_version": 1,
@@ -812,6 +886,10 @@ class UziLlmOrchestrator:
             "narrative_override": synthesis.get("narrative_override"),
             "qualitative_deep_dive": synthesis.get("qualitative_deep_dive"),
             "data_gap_acknowledged": synthesis.get("data_gap_acknowledged"),
+            # per_investor_override：上游 generate_synthesis 识别此字段并覆盖
+            # panel.json 投资者卡片（signal/score/headline/reasoning/comment/verdict）。
+            # 这是 LLM role-play 成果真正生效的字段（上游 score_fns.py:935）。
+            "per_investor_override": per_investor_override,
             "consistency_review": (
                 dict(consistency) if isinstance(consistency, dict) else {}
             ),
@@ -928,6 +1006,8 @@ class UziLlmOrchestrator:
             errors.append("data_gap_acknowledged 必须是对象（key 为维度名）。")
 
         # §5.3：禁止空壳 —— AniU 私有元信息必须包含实质子任务结果。
+        # 不仅检查子任务数量，还检查每个子任务结果是否为空 {}
+        # （review 问题5：空 {} 子任务不应被字典数量检查放行）。
         aniu_meta = payload.get("_aniu_meta") or {}
         panel_subtasks = aniu_meta.get("panel_subtasks") or {}
         qual_subtasks = aniu_meta.get("qualitative_subtasks") or {}
@@ -937,6 +1017,41 @@ class UziLlmOrchestrator:
             errors.append(
                 "评审结果为空壳：面板或定性子任务汇总缺失，"
                 "不允许标记为完整深度报告。"
+            )
+        else:
+            # 每个子任务结果必须包含实质内容（非空 dict 且有至少 1 个非空字段）
+            def _is_non_empty_result(value: Any) -> bool:
+                if not isinstance(value, dict) or not value:
+                    return False
+                return any(
+                    v not in (None, "", [], {})
+                    for v in value.values()
+                )
+            empty_panel = [
+                sid for sid, res in panel_subtasks.items()
+                if not _is_non_empty_result(res)
+            ]
+            empty_qual = [
+                sid for sid, res in qual_subtasks.items()
+                if not _is_non_empty_result(res)
+            ]
+            if empty_panel:
+                errors.append(
+                    f"面板子任务结果为空壳（{empty_panel[:3]}），"
+                    "不允许标记为完整深度报告。"
+                )
+            if empty_qual:
+                errors.append(
+                    f"定性子任务结果为空壳（{empty_qual[:3]}），"
+                    "不允许标记为完整深度报告。"
+                )
+        # per_investor_override：面板评审真正接入上游报告的字段，必须非空
+        # （review 问题5：LLM 评审应覆盖投资者卡片，不只是叙述文本）
+        pio = payload.get("per_investor_override")
+        if not isinstance(pio, dict) or not pio:
+            errors.append(
+                "per_investor_override 必须是非空对象（LLM 评审应覆盖"
+                "投资者卡片，而非仅生成叙述文本）。"
             )
         return (not errors, errors)
 

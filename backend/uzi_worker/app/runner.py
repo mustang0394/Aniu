@@ -299,6 +299,9 @@ class JobRunner:
             else worker_root + os.pathsep + existing_pythonpath
         )
         if mx_api_key:
+            # 上游 UZI 代码读取的是 MX_APIKEY（review P2）；保留 UZI_MX_API_KEY
+            # 作为兼容别名，避免日志/脱敏注册逻辑重复读取差异。
+            env["MX_APIKEY"] = mx_api_key
             env["UZI_MX_API_KEY"] = mx_api_key
 
         log_handle = log_path.open("a", encoding="utf-8")

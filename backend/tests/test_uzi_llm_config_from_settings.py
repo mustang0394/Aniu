@@ -18,7 +18,11 @@ from app.services.uzi_llm_orchestrator import (
     UziLlmOrchestrator,
     UziReviewError,
 )
-from tests.uzi_test_helpers import valid_uzi_synthesis, write_fake_stage1
+from tests.uzi_test_helpers import (
+    fake_llm_content_for_subtask,
+    valid_uzi_synthesis,
+    write_fake_stage1,
+)
 
 
 def test_orchestrator_uses_app_settings_config(monkeypatch, tmp_path) -> None:
@@ -52,7 +56,7 @@ def test_orchestrator_uses_app_settings_config(monkeypatch, tmp_path) -> None:
             if "综合组装" in system_text:
                 content = json.dumps(valid_uzi_synthesis())
             else:
-                content = json.dumps({"topic": "t", "conclusions": []})
+                content = fake_llm_content_for_subtask(system_text)
             return {"choices": [{"message": {"content": content, "tool_calls": []}}]}
 
         def run_structured_json_call(self, **kwargs):

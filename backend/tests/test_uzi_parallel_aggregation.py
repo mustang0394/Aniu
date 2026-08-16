@@ -92,19 +92,44 @@ def _valid_synthesis() -> dict:
 
 
 def _response_for(subtask_id: str) -> dict:
-    """按子任务 id 返回固定 JSON 响应，验证汇总。"""
-    payload = {
-        "topic": f"{subtask_id}-topic",
-        "stance": "bullish" if subtask_id.startswith("panel_a") else "neutral",
-        "conclusions": [{"claim": f"{subtask_id} 结论"}],
-        "counter_points": [],
-        "data_gaps": [],
-        "sources": [f"{subtask_id}-source"],
-    }
+    """按子任务 id 返回固定 JSON 响应，验证汇总。
+
+    面板子任务必须输出 per_investor_override（review 问题5），否则空壳校验
+    会掊截。定性子任务输出含 evidence 的实质内容。
+    """
     if subtask_id == "consistency":
-        payload = {"conflicts": [], "notes": "无冲突"}
-    if subtask_id == "synthesis":
+        payload = {"conflicts": [], "notes": "无冲突", "overall": "一致",
+                   "conclusion": "无事实冲突。"}
+    elif subtask_id == "synthesis":
         payload = _valid_synthesis()
+    elif subtask_id.startswith("panel"):
+        payload = {
+            "topic": f"{subtask_id}-topic",
+            "stance": "bullish" if subtask_id == "panel_a" else "neutral",
+            "conclusions": [{"claim": f"{subtask_id} 结论"}],
+            "distribution": {"bullish": 5, "neutral": 2, "bearish": 1},
+            "per_investor_override": {
+                f"{subtask_id}_inv1": {
+                    "signal": "bullish",
+                    "score": 80,
+                    "headline": f"{subtask_id} 看多",
+                    "reasoning": f"{subtask_id} 估值低，现金流稳。",
+                    "comment": f"{subtask_id} 看多",
+                    "verdict": "买入",
+                },
+            },
+        }
+    else:  # 定性子任务
+        payload = {
+            "topic": f"{subtask_id}-topic",
+            "conclusions": [{"claim": f"{subtask_id} 结论"}],
+            "evidence": [
+                {"source": f"{subtask_id}-src", "url": "https://example.com",
+                 "finding": f"{subtask_id} 发现"},
+            ],
+            "associations": [],
+            "conclusion": f"{subtask_id} 结论文本。",
+        }
     return {"choices": [{"message": {"content": json.dumps(payload),
                                      "tool_calls": []}}]}
 

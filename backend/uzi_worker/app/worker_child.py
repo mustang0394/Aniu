@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     # 子进程也登记脱敏：Worker Token 与 MX Key 不得出现在日志中。
     if config.token:
         register_secret(config.token)
-    mx_api_key = os.environ.get("UZI_MX_API_KEY") or None
+    mx_api_key = os.environ.get("MX_APIKEY") or os.environ.get("UZI_MX_API_KEY") or None
     if mx_api_key:
         register_secret(mx_api_key)
 

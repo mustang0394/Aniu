@@ -38,11 +38,14 @@ class FakeWorkerClient(UziWorkerClient):
             return None
         return {
             "status": "ok",
+            "ready": True,
+            "reason": None,
             "worker_version": self.version,
             "uzi_commit": self.version,
             "chromium_available": True,
             "active_jobs": 0,
             "queued_jobs": 0,
+            "token_configured": True,
         }
 
     def submit_stage1(self, *, report_id, ticker, report_rel_dir, mx_api_key=None):
@@ -64,6 +67,9 @@ class FakeWorkerClient(UziWorkerClient):
             self.jobs[report_id]["status"] = "failed"
             self.jobs[report_id]["error_code"] = self.stage1_fail_code
             self.jobs[report_id]["error_message"] = "Stage 1 失败。"
+        else:
+            # 写 Stage 1 产物到共享目录（run_llm_review 与 _build_summary 都需读 work/*.json）
+            write_fake_stage1(get_settings().uzi_report_root, report_id)
         return {"job": self.jobs[report_id]}
 
     def get_job(self, report_id):
@@ -108,11 +114,38 @@ class FakeWorkerClient(UziWorkerClient):
             "company_name": "贵州茅台",
             "overall_score": 78.5,
             "verdict_label": "谨慎看多",
-            "one_liner": "核心结论",
             "data_as_of": "2026-08-16T00:00:00",
+            "institutional_modeling": {
+                "initiating_rating": "买入",
+                "target_price": 1850.0,
+                "upside_pct": 12.5,
+                "dcf_verdict": "合理偏低",
+                "comps_verdict": "溢价",
+                "lbo_verdict": "—",
+            },
+            "dashboard": {
+                "core_conclusion": "贵州茅台 79 分，谨慎看多，品牌护城河深厚。",
+                "intelligence": {
+                    "news": "已采集 5 项催化剂事件",
+                    "risks": ["PE 历史 75 分位"],
+                    "catalysts": ["Q2 业绩预告", "分红派息", "新品发布"],
+                },
+            },
+            "data_gaps": {
+                "coverage_pct": 92.0,
+                "total_gaps": 3,
+                "unresolved": 1,
+                "tasks": [{"dim": "4_peers", "field": "peers", "severity": "warning"}],
+            },
+            "risks": ["PE 历史 75 分位", "消费降级"],
         }
         (artifacts / "synthesis.json").write_text(
             _json.dumps(synthesis, ensure_ascii=False), encoding="utf-8"
+        )
+        # one-liner.txt（上游真实产物文件名）
+        (artifacts / "one-liner.txt").write_text(
+            "贵州茅台 体检结果：79 分，谨慎看多。\n💬 品牌护城河深厚。",
+            encoding="utf-8",
         )
         manifest = {
             "schema_version": 1,
@@ -269,9 +302,18 @@ def write_fake_stage1(root, report_id: int, *, ticker: str = "600519.SH",
         encoding="utf-8",
     )
     (work / "panel.json").write_text(
-        _json.dumps({"categories": ["价值", "成长"], "bullish": 10,
-                     "neutral": 5, "bearish": 3},
-                    ensure_ascii=False),
+        _json.dumps({
+            "ticker": ticker,
+            "panel_consensus": 62.5,
+            "signal_distribution": {"bullish": 21, "neutral": 15, "bearish": 12, "skip": 3},
+            "investors": [
+                {"investor_id": "buffett", "name": "巴菲特", "group": "value", "signal": "bullish", "score": 82, "verdict": "买入"},
+            ],
+            "school_scores": {
+                "value": {"label": "价值派", "verdict": "买入", "bullish": 8, "neutral": 2, "bearish": 1},
+                "growth": {"label": "成长派", "verdict": "观望", "bullish": 5, "neutral": 6, "bearish": 4},
+            },
+        }, ensure_ascii=False),
         encoding="utf-8",
     )
     (work / "_data_gaps.json").write_text(
@@ -341,3 +383,77 @@ def valid_uzi_synthesis() -> dict:
             "8_materials": "原材料成本明细未能获取，已尝试公开数据源。"
         },
     }
+
+
+def fake_panel_subtask_result() -> dict:
+    """面板子任务的假 LLM 输出（含 per_investor_override，满足空壳校验）。
+
+    review 问题5：面板子任务必须输出 per_investor_override 让 LLM 评审
+    真正覆盖上游投资者卡片，且不能是空 {}。
+    """
+    return {
+        "topic": "panel_review",
+        "conclusions": [{"point": "价值派看多", "evidence": "PE 处于历史低位"}],
+        "distribution": {"bullish": 5, "neutral": 2, "bearish": 1},
+        "per_investor_override": {
+            "buffett": {
+                "signal": "bullish",
+                "score": 82,
+                "headline": "估值偏低，现金流稳健",
+                "reasoning": "PE 处于历史 25 分位，ROE 稳定在 15% 以上。",
+                "comment": "估值偏低，现金流稳健",
+                "verdict": "买入",
+            },
+            "munger": {
+                "signal": "bullish",
+                "score": 78,
+                "headline": "护城河深厚",
+                "reasoning": "品牌定价权强，毛利率稳定。",
+                "comment": "护城河深厚",
+                "verdict": "关注",
+            },
+        },
+    }
+
+
+def fake_qualitative_subtask_result() -> dict:
+    """定性研究子任务的假 LLM 输出（含 evidence，满足空壳校验）。"""
+    return {
+        "topic": "qualitative",
+        "conclusions": [{"point": "宏观友好", "evidence": "流动性宽松"}],
+        "evidence": [
+            {"source": "央行报告", "url": "https://example.com/macro", "finding": "流动性宽松"},
+        ],
+        "associations": [],
+        "conclusion": "宏观环境友好，政策支持明确。",
+    }
+
+
+def fake_consistency_result() -> dict:
+    """一致性审查子任务的假 LLM 输出。"""
+    return {
+        "conflicts": [],
+        "gaps": [],
+        "over_inferences": [],
+        "overall": "一致",
+        "conclusion": "无事实冲突，证据链一致。",
+    }
+
+
+def fake_llm_content_for_subtask(system_text: str) -> str:
+    """根据 system_prompt 判断子任务类型，返回对应的假 LLM 内容（JSON 字符串）。
+
+    供 orchestrator 测试的 _FakeLLM._call_llm_stream 使用：综合组装返回
+    valid_uzi_synthesis()；面板子任务返回 fake_panel_subtask_result()；
+    定性返回 fake_qualitative_subtask_result()；一致性返回
+    fake_consistency_result()。
+    """
+    import json as _json
+    if "综合组装" in system_text:
+        return _json.dumps(valid_uzi_synthesis())
+    if "一致性" in system_text:
+        return _json.dumps(fake_consistency_result())
+    if "定性研究" in system_text:
+        return _json.dumps(fake_qualitative_subtask_result())
+    # 默认面板子任务
+    return _json.dumps(fake_panel_subtask_result())

@@ -61,11 +61,18 @@ def _upstream_validate(agent_analysis: dict) -> list:
 def _assemble(stage1_panel=None, synthesis=None) -> dict:
     stage1 = {
         "manifest": {"ticker_normalized": "600519.SH", "company_name": "贵州茅台", "data_as_of": "2026-08-16T00:00:00"},
-        "panel": stage1_panel or {"bullish": 18, "neutral": 21, "bearish": 12},
+        "panel": stage1_panel or {"signal_distribution": {"bullish": 18, "neutral": 21, "bearish": 12, "skip": 0}},
         "data_gaps": {"coverage_pct": 92, "unresolved": 1, "items": []},
     }
-    panel_results = {f"panel_{c}": {"topic": "t"} for c in "abcd"}
-    qual_results = {f"qual_{c}": {"topic": "t"} for c in "abc"}
+    # 面板子任务结果含 per_investor_override（review 问题5）
+    panel_results = {
+        f"panel_{c}": {"topic": "t", "per_investor_override": {
+            f"{c}_inv1": {"signal": "bullish", "score": 80,
+                          "headline": f"{c} 看多", "reasoning": f"{c} 估值低。",
+                          "comment": f"{c} 看多", "verdict": "买入"}}}
+        for c in "abcd"
+    }
+    qual_results = {f"qual_{c}": {"topic": "t", "evidence": [{"source": "s", "finding": "f"}], "conclusion": "结论。"} for c in "abc"}
     return UziLlmOrchestrator._assemble_agent_analysis(
         stage1=stage1,
         panel_results=panel_results,

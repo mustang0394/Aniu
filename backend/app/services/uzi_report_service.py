@@ -50,6 +50,7 @@ from app.services.uzi_llm_orchestrator import (
 from app.services.uzi_worker_client import (
     UZI_WORKER_UNAVAILABLE,
     UziWorkerClient,
+    WorkerJobPayloadError,
     uzi_worker_client,
 )
 
@@ -616,9 +617,9 @@ class UziReportService:
             if resume_status in {"queued", "stage1_running"}:
                 self._run_stage1(report_id, deadline=deadline)
                 self._check_timeout(deadline, report_id)
-                self.run_llm_review(report_id)
+                self.run_llm_review(report_id, deadline=deadline)
             elif resume_status == "llm_review":
-                self.run_llm_review(report_id)
+                self.run_llm_review(report_id, deadline=deadline)
             # stage2_running 直接进入 stage2
             self._check_timeout(deadline, report_id)
             if resume_status in {"queued", "stage1_running", "llm_review"}:
@@ -637,6 +638,9 @@ class UziReportService:
                         error_message="任务已被取消。",
                     )
         except _JobFailed as exc:
+            # 超时/失败时，若任务可能在 Worker 运行，尽力终止 Worker 子进程，
+            # 防止残留进程继续写文件（§17.3 / review P1）。
+            self._cancel_worker_best_effort(report_id)
             with session_scope() as db:
                 job = db.get(UziReportJob, report_id)
                 if job is not None and job.status not in UZI_TERMINAL_STATUSES:
@@ -648,6 +652,8 @@ class UziReportService:
                     )
         except Exception as exc:  # noqa: BLE001
             logger.exception("UZI 任务未捕获异常: report_id=%s", report_id)
+            # 兜底：同样尽力终止 Worker 子进程。
+            self._cancel_worker_best_effort(report_id)
             with session_scope() as db:
                 job = db.get(UziReportJob, report_id)
                 if job is not None and job.status not in UZI_TERMINAL_STATUSES:
@@ -671,16 +677,96 @@ class UziReportService:
                 select(AppSettings).order_by(AppSettings.id).limit(1)
             ).mx_api_key
 
-        payload = self._worker.submit_stage1(
-            report_id=report_id,
-            ticker=job.ticker_input,
-            report_rel_dir=str(report_id),
-            mx_api_key=mx_api_key,
-        )
+        # 恢复语义（§17.1）：先查询 Worker 已有任务状态，避免重启后重复提交。
+        worker_state = self._worker.get_job(report_id)
+        if worker_state is not None:
+            status = str(worker_state.get("status") or "").strip()
+            phase = str(worker_state.get("phase") or "").strip()
+            # Stage 1 完成标志：worker status=succeeded 且本地已有 stage1-manifest.json
+            stage1_manifest = self._read_stage1_manifest(report_id)
+            stage1_done = stage1_manifest is not None and status == "succeeded"
+            if stage1_done:
+                # Worker 已完成 Stage 1：跳过提交，直接进入 LLM 评审。
+                self._sync_worker_progress(report_id, worker_state)
+                return
+            if status in {"accepted", "running"}:
+                # Worker 仍在执行：只轮询，不重复提交。
+                self._sync_worker_progress(report_id, worker_state)
+                self._poll_worker(
+                    report_id,
+                    until={"succeeded", "failed", "cancelled"},
+                    deadline=deadline,
+                )
+                return
+            if status in {"failed", "cancelled"}:
+                raise _JobFailed(
+                    ERROR_STAGE1_FAILED if status == "failed" else ERROR_CANCELLED,
+                    str(
+                        worker_state.get("error_message")
+                        or f"Worker Stage 1 已{status}。"
+                    ),
+                )
+        else:
+            # Worker 不认识该任务：若本地已有 Stage 1 清单则从产物推进，
+            # 否则视为新任务正常提交。
+            stage1_manifest = self._read_stage1_manifest(report_id)
+            if stage1_manifest is not None:
+                logger.info(
+                    "重启恢复：Worker 不认识任务但本地已有 Stage 1 产物，"
+                    "跳过 Stage 1 直接推进: report_id=%s",
+                    report_id,
+                )
+                return
+
+        # 正常提交；若 Worker 返回"任务已存在"等业务错误，转查询状态继续。
+        try:
+            payload = self._worker.submit_stage1(
+                report_id=report_id,
+                ticker=job.ticker_input,
+                report_rel_dir=str(report_id),
+                mx_api_key=mx_api_key,
+            )
+        except WorkerJobPayloadError as exc:
+            logger.warning(
+                "Stage 1 提交被拒绝，转查询 Worker 状态继续: report_id=%s %s",
+                report_id, exc,
+            )
+            worker_state = self._worker.get_job(report_id)
+            if worker_state is not None:
+                status = str(worker_state.get("status") or "").strip()
+                if status == "succeeded":
+                    self._sync_worker_progress(report_id, worker_state)
+                    return
+                if status in {"accepted", "running"}:
+                    self._poll_worker(
+                        report_id,
+                        until={"succeeded", "failed", "cancelled"},
+                        deadline=deadline,
+                    )
+                    return
+                if status in {"failed", "cancelled"}:
+                    raise _JobFailed(
+                        ERROR_STAGE1_FAILED if status == "failed" else ERROR_CANCELLED,
+                        str(
+                            worker_state.get("error_message")
+                            or f"Worker Stage 1 已{status}。"
+                        ),
+                    ) from exc
+            raise _JobFailed(ERROR_STAGE1_FAILED, f"Stage 1 提交失败：{exc}") from exc
         if payload is None:
             raise _JobFailed(ERROR_WORKER_UNAVAILABLE, "UZI Worker 不可用，Stage 1 提交失败。")
 
         self._poll_worker(report_id, until={"succeeded", "failed", "cancelled"}, deadline=deadline)
+
+    def _read_stage1_manifest(self, report_id: int) -> dict[str, Any] | None:
+        """读取本地 Stage 1 清单；不存在或损坏时返回 None。"""
+        try:
+            report_dir = self._resolve_report_dir(str(report_id))
+        except RuntimeError:
+            return None
+        if report_dir is None:
+            return None
+        return _load_json_file(report_dir / "work" / "stage1-manifest.json")
 
     def _read_stage1_ticker(self, report_id: int) -> str | None:
         """从 Stage 1 清单读取标准化股票代码（供 Stage 2 一致性校验）。"""
@@ -758,8 +844,11 @@ class UziReportService:
                 )
 
     # ── LLM 深度评审（§13，批次3 接入）────────────────────
-    def run_llm_review(self, report_id: int) -> None:
+    def run_llm_review(self, report_id: int, *, deadline: float | None = None) -> None:
         """AniU 大模型深度评审（文档 §5.3 / §13）。
+
+        ``deadline``（可选）：monotonic 时间戳；LLM 评审的多轮子任务、
+        工具调用与重试受总任务 deadline 约束（§13.5 / review P1）。
 
         默认调用 ``UziLlmOrchestrator`` 执行多轮结构化评审并写入
         ``work/agent_analysis.json``（``agent_reviewed=true``）。
@@ -812,6 +901,7 @@ class UziReportService:
                 report_root=get_settings().uzi_report_root,
                 progress=_progress,
                 cancel_event=cancel_event,
+                deadline=deadline,
             )
         except UziReviewCancelled:
             raise _JobCancelled() from None
@@ -826,21 +916,80 @@ class UziReportService:
             raise _JobFailed(ERROR_LLM_REVIEW_FAILED, f"深度评审执行异常：{exc}") from exc
 
     def _write_mock_llm_review(self, report_id: int) -> None:
-        """测试/联调逃生口：写入最小合法 agent_analysis.json（标注 mock）。"""
+        """测试/联调逃生口：写入符合上游 schema 的最小合法 agent_analysis.json。
+
+        从 panel.json 读取真实投资者列表生成 per_investor_override，确保
+        mock 评审也覆盖投资者卡片（review 问题5），不会因空壳被掊截。
+        """
         report_dir = self._resolve_report_dir(str(report_id))
         if report_dir is None:
             raise _JobFailed(ERROR_ORPHANED_JOB, "报告目录缺失。")
         work_dir = report_dir / "work"
         work_dir.mkdir(parents=True, exist_ok=True)
+        # 从 panel.json 抽取真实投资者生成 per_investor_override（review 问题5）
+        panel = _load_json_file(work_dir / "panel.json") or {}
+        investors = panel.get("investors") or []
+        per_investor_override: dict[str, Any] = {}
+        if isinstance(investors, list):
+            for inv in investors[:8]:
+                if not isinstance(inv, dict):
+                    continue
+                inv_id = str(inv.get("investor_id") or "").strip()
+                if not inv_id:
+                    continue
+                per_investor_override[inv_id] = {
+                    "signal": inv.get("signal") or "neutral",
+                    "score": inv.get("score") or 60,
+                    "headline": f"[mock] {inv.get('name', inv_id)} 评审占位",
+                    "reasoning": "[mock 评审] 测试联调用占位评语，需真实 LLM 评审。",
+                    "comment": f"[mock] {inv.get('name', inv_id)} 占位。",
+                    "verdict": inv.get("verdict") or "观望",
+                }
         agent_analysis = {
             "agent_reviewed": True,
             "mock_review": True,
-            "dim_commentary": {},
-            "panel_insights": {},
-            "great_divide_override": None,
-            "narrative_override": None,
-            "qualitative_deep_dive": {},
-            "data_gap_acknowledged": True,
+            "schema_version": 1,
+            "dim_commentary": {
+                "0_basic": "[mock 评审] 公司基本面稳健，营收利润保持增长。测试联调用占位评语。",
+                "1_financials": "[mock 评审] ROE 保持稳定，现金流充裕。测试联调用占位评语。",
+            },
+            "panel_insights": "[mock 评审] 评委投票多头略占优，价值派与成长派分歧在估值中枢。测试联调用占位内容。",
+            "great_divide_override": {
+                "punchline": "[mock] 价值派看多但成长派担心增速回落。",
+                "bull_say_rounds": ["[mock] 估值低", "[mock] 现金流稳", "[mock] 股息高"],
+                "bear_say_rounds": ["[mock] 增速放缓", "[mock] 竞争加剧", "[mock] 宏观不确定"],
+            },
+            "narrative_override": {
+                "core_conclusion": "[mock 评审] 综合基本面与情绪，中长期价值较高。测试联调用占位结论。",
+                "risks": ["[mock] 行业政策变化", "[mock] 原材料波动", "[mock] 市场风格切换"],
+                "buy_zones": {
+                    "value": {"price": 1650, "rationale": "[mock] 低估值区间"},
+                    "growth": {"price": 1700, "rationale": "[mock] 成长合理"},
+                    "technical": {"price": 1680, "rationale": "[mock] 技术支撑"},
+                    "youzi": {"price": 1720, "rationale": "[mock] 情绪驱动"},
+                },
+            },
+            "qualitative_deep_dive": {
+                "3_macro": {
+                    "evidence": [{"source": "[mock]", "url": "", "finding": "[mock] 流动性宽松"}],
+                    "associations": [],
+                    "conclusion": "[mock] 宏观环境友好。",
+                },
+                "7_industry": {
+                    "evidence": [{"source": "[mock]", "url": "", "finding": "[mock] 行业景气上行"}],
+                    "associations": [],
+                    "conclusion": "[mock] 行业空间广阔。",
+                },
+                "13_policy": {
+                    "evidence": [{"source": "[mock]", "url": "", "finding": "[mock] 政策中性"}],
+                    "associations": [],
+                    "conclusion": "[mock] 政策无扰动。",
+                },
+            },
+            "data_gap_acknowledged": {
+                "8_materials": "[mock] 原材料成本明细未获取。"
+            },
+            "per_investor_override": per_investor_override,
         }
         (work_dir / "agent_analysis.json").write_text(
             json.dumps(agent_analysis, ensure_ascii=False, indent=2),
@@ -865,11 +1014,68 @@ class UziReportService:
                 message="Stage 2 开始综合与报告渲染。",
             )
 
+        # 恢复语义（§17.1）：先查询 Worker 已有任务状态，避免重启后重复提交。
+        # 注意：Worker 的 job state 是 stage1/stage2 共享的，
+        # status=succeeded 可能是 Stage 1 完成（而非 Stage 2），
+        # 因此必须额外检查 Stage 2 产物（artifacts/synthesis.json）是否存在。
+        worker_state = self._worker.get_job(report_id)
+        artifacts_synthesis = self._resolve_report_dir(str(report_id))
+        stage2_done = (
+            artifacts_synthesis is not None
+            and (artifacts_synthesis / "artifacts" / "synthesis.json").is_file()
+        )
+        if worker_state is not None:
+            status = str(worker_state.get("status") or "").strip()
+            if status == "succeeded":
+                if stage2_done:
+                    # Stage 2 确已完成：跳过提交，直接落库。
+                    self._sync_worker_progress(report_id, worker_state)
+                    return
+                # status=succeeded 但无 Stage 2 产物：Stage 1 已完成，
+                # 需要 submit_stage2，不跳过。
+            elif status in {"accepted", "running"}:
+                # Worker 仍在执行：只轮询，不重复提交。
+                self._sync_worker_progress(report_id, worker_state)
+                self._poll_worker(
+                    report_id,
+                    until={"succeeded", "failed", "cancelled"},
+                    deadline=deadline,
+                )
+                return
+            if status in {"failed", "cancelled"}:
+                raise _JobFailed(
+                    ERROR_STAGE2_FAILED if status == "failed" else ERROR_CANCELLED,
+                    str(
+                        worker_state.get("error_message")
+                        or f"Worker Stage 2 已{status}。"
+                    ),
+                )
+
         # 从 Stage 1 清单读取标准化代码，供 Worker 校验与 Stage 1 一致（§11.4）。
         normalized_ticker = self._read_stage1_ticker(report_id)
-        payload = self._worker.submit_stage2(
-            report_id=report_id, ticker=normalized_ticker
-        )
+        try:
+            payload = self._worker.submit_stage2(
+                report_id=report_id, ticker=normalized_ticker
+            )
+        except WorkerJobPayloadError as exc:
+            logger.warning(
+                "Stage 2 提交被拒绝，转查询 Worker 状态继续: report_id=%s %s",
+                report_id, exc,
+            )
+            worker_state = self._worker.get_job(report_id)
+            if worker_state is not None:
+                status = str(worker_state.get("status") or "").strip()
+                if status == "succeeded":
+                    self._sync_worker_progress(report_id, worker_state)
+                    return
+                if status in {"accepted", "running"}:
+                    self._poll_worker(
+                        report_id,
+                        until={"succeeded", "failed", "cancelled"},
+                        deadline=deadline,
+                    )
+                    return
+            raise _JobFailed(ERROR_STAGE2_FAILED, f"Stage 2 提交失败：{exc}") from exc
         if payload is None:
             raise _JobFailed(ERROR_STAGE2_FAILED, "Stage 2 提交失败（Worker 不可达）。")
         self._poll_worker(report_id, until={"succeeded", "failed", "cancelled"}, deadline=deadline)
@@ -887,7 +1093,7 @@ class UziReportService:
         if manifest is None:
             raise _JobFailed(ERROR_ARTIFACT_INVALID, "artifact-manifest.json 缺失。")
 
-        summary = self._build_summary(synthesis, manifest)
+        summary = self._build_summary(synthesis, manifest, report_dir=report_dir)
         with session_scope() as db:
             job = db.get(UziReportJob, report_id)
             if job is None or job.status in UZI_TERMINAL_STATUSES:
@@ -910,45 +1116,133 @@ class UziReportService:
                 final=True,
             )
 
-    def _build_summary(self, synthesis: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
-        """标准化摘要结构（文档 §9.1），字段允许为空但不允许随意改名。
+    def _build_summary(
+        self,
+        synthesis: dict[str, Any],
+        manifest: dict[str, Any],
+        report_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        """标准化摘要结构（文档 §9.1），按上游真实字段路径归一化。
 
-        上游 synthesis 字段为 ``overall_score`` / ``verdict_label``（§阻断项3）。
+        上游产物真实结构（commit 7bc779d，已验证）：
+        - 估值在 ``synthesis.institutional_modeling``（含
+          initiating_rating/target_price/upside_pct/dcf_verdict 等）
+        - 催化剂在 ``synthesis.dashboard.intelligence.catalysts``
+        - 数据缺口在 ``synthesis.data_gaps``（含 coverage_pct/total_gaps/
+          unresolved/tasks）
+        - 投资者统计在 ``panel.json.signal_distribution``（需从 work 目录读）
+        - 一句话在 ``artifacts/one-liner.txt``
+        - 定性评审在 ``agent_analysis.json`` 的 qualitative_deep_dive
         """
         score = synthesis.get("overall_score")
         try:
             score = float(score) if score is not None else 0.0
         except (TypeError, ValueError):
             score = 0.0
+
+        # 估值：institutional_modeling
+        inst = synthesis.get("institutional_modeling") or {}
+        valuation_methods: list[str] = []
+        for key in ("dcf_verdict", "lbo_verdict", "comps_verdict"):
+            val = inst.get(key)
+            if val:
+                valuation_methods.append(f"{key}:{val}")
+        target_price = inst.get("target_price")
+        upside_pct = inst.get("upside_pct")
+
+        # 催化剂：dashboard.intelligence.catalysts
+        dashboard = synthesis.get("dashboard") or {}
+        intelligence = dashboard.get("intelligence") or {}
+        catalysts = list(intelligence.get("catalysts") or [])
+
+        # 数据缺口：synthesis.data_gaps（stage2 从 _data_gaps.json 合并）
+        dg = synthesis.get("data_gaps") or {}
+        data_gap_items = list(dg.get("tasks") or [])
+        coverage_pct = dg.get("coverage_pct")
+        try:
+            coverage_pct = float(coverage_pct) if coverage_pct is not None else 0.0
+        except (TypeError, ValueError):
+            coverage_pct = 0.0
+        unresolved = int(dg.get("unresolved") or 0)
+
+        # 投资者统计：panel.json.signal_distribution（需从 work 目录读）
+        panel_bullish = panel_neutral = panel_bearish = 0
+        key_disagreements: list[str] = []
+        qualitative: dict[str, Any] = {}
+        if report_dir is not None:
+            panel = _load_json_file(report_dir / "work" / "panel.json") or {}
+            sig_dist = panel.get("signal_distribution") or {}
+            panel_bullish = int(sig_dist.get("bullish") or 0)
+            panel_neutral = int(sig_dist.get("neutral") or 0)
+            panel_bearish = int(sig_dist.get("bearish") or 0)
+            # school_scores 提供流派级分歧
+            school_scores = panel.get("school_scores") or {}
+            for _g, _sc in school_scores.items():
+                if isinstance(_sc, dict):
+                    verdict = str(_sc.get("verdict") or "").strip()
+                    if verdict:
+                        label = str(_sc.get("label") or _g).strip()
+                        key_disagreements.append(f"{label}:{verdict}")
+            # 定性评审：agent_analysis.json.qualitative_deep_dive
+            agent_aa = _load_json_file(report_dir / "work" / "agent_analysis.json") or {}
+            qdd = agent_aa.get("qualitative_deep_dive")
+            if isinstance(qdd, dict):
+                qualitative = qdd
+            # 也可从 panel_insights 补充定性叙述
+            pi = agent_aa.get("panel_insights")
+            if isinstance(pi, str) and pi.strip():
+                qualitative.setdefault("panel_insights", pi.strip())
+
+        # one-liner：artifacts/one-liner.txt
+        one_liner = ""
+        if report_dir is not None:
+            ol_path = report_dir / "artifacts" / "one-liner.txt"
+            try:
+                if ol_path.is_file():
+                    one_liner = ol_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                one_liner = ""
+        # dashboard.core_conclusion 作为 one_liner 兑底
+        if not one_liner:
+            one_liner = str(dashboard.get("core_conclusion") or "").strip()
+
+        # data_as_of：stage1-manifest.data_as_of（finalize 中 synthesis 通常无此字段）
+        data_as_of = str(synthesis.get("data_as_of") or "").strip()
+        if not data_as_of and report_dir is not None:
+            s1m = _load_json_file(report_dir / "work" / "stage1-manifest.json") or {}
+            data_as_of = str(s1m.get("data_as_of") or "").strip()
+
         return {
             "schema_version": 1,
             "ticker": str(synthesis.get("ticker") or "").strip(),
-            "company_name": str(synthesis.get("company_name") or synthesis.get("name") or "").strip(),
+            "company_name": str(
+                synthesis.get("company_name") or synthesis.get("name") or ""
+            ).strip(),
             "overall_score": score,
             "verdict": str(synthesis.get("verdict_label") or "").strip(),
-            "one_liner": str(synthesis.get("one_liner") or "").strip(),
+            "one_liner": one_liner,
             "valuation": {
-                "rating": str(synthesis.get("valuation_rating") or "").strip(),
-                "target_price": float(synthesis.get("target_price") or 0 or 0),
-                "upside_pct": float(synthesis.get("upside_pct") or 0 or 0),
-                "methods": list(synthesis.get("valuation_methods") or []),
+                "rating": str(inst.get("initiating_rating") or "").strip(),
+                "target_price": float(target_price) if target_price is not None else 0,
+                "upside_pct": float(upside_pct) if upside_pct is not None else 0,
+                "methods": valuation_methods,
             },
             "risks": list(synthesis.get("risks") or []),
-            "catalysts": list(synthesis.get("catalysts") or []),
+            "catalysts": catalysts,
             "panel": {
-                "bullish": int(synthesis.get("panel_bullish") or 0),
-                "neutral": int(synthesis.get("panel_neutral") or 0),
-                "bearish": int(synthesis.get("panel_bearish") or 0),
-                "key_disagreements": list(synthesis.get("key_disagreements") or []),
+                "bullish": panel_bullish,
+                "neutral": panel_neutral,
+                "bearish": panel_bearish,
+                "key_disagreements": key_disagreements,
             },
-            "qualitative": dict(synthesis.get("qualitative") or {}),
+            "qualitative": qualitative,
             "data_gaps": {
-                "coverage_pct": float(synthesis.get("coverage_pct") or 0 or 0),
-                "unresolved": int(synthesis.get("unresolved_gaps") or 0),
-                "items": list(synthesis.get("data_gap_items") or []),
+                "coverage_pct": coverage_pct,
+                "unresolved": unresolved,
+                "items": data_gap_items,
             },
             "sources": list(synthesis.get("sources") or []),
-            "data_as_of": str(synthesis.get("data_as_of") or ""),
+            "data_as_of": data_as_of,
             "generated_at": str(manifest.get("generated_at") or ""),
             "disclaimer": "历史研究资料，不构成投资建议",
         }
@@ -1041,6 +1335,17 @@ class UziReportService:
             event = self._cancel_events.get(report_id)
             if event is not None and event.is_set():
                 raise _JobCancelled()
+
+    def _cancel_worker_best_effort(self, report_id: int) -> None:
+        """尽力向 Worker 发送取消请求；失败仅记录日志，不阻断主流程。"""
+        try:
+            self._worker.cancel(report_id)
+        except (WorkerJobPayloadError, Exception):  # noqa: BLE001 - 取消尽力而为
+            logger.warning(
+                "向 Worker 发送取消失败（best-effort）: report_id=%s",
+                report_id,
+                exc_info=True,
+            )
 
     @staticmethod
     def _check_timeout(deadline: float, report_id: int) -> None:

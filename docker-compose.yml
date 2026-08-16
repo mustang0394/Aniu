@@ -15,7 +15,7 @@ services:
     # （文档 §18.3），UZI 菜单保留但生成按钮禁用。
 
   aniu-uzi-worker:
-    image: ghcr.io/Mustang0394/aniu-uzi-worker:${ANIU_IMAGE_TAG:-latest}
+    image: ghcr.io/mustang0394/aniu-uzi-worker:${ANIU_IMAGE_TAG:-latest}
     container_name: aniu-uzi-worker
     restart: unless-stopped
     build:

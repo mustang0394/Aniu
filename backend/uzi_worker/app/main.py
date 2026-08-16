@@ -162,15 +162,29 @@ def create_app() -> FastAPI:
         active = runner.active_jobs() if runner else 0
         states = store.all_states() if store else []
         queued = len([s for s in states if s.status == "accepted"])
+        # readiness：区分 liveness 与就绪度（review 问题9）。
+        # token 未配置/源码不存在/chromium 不可用时 ready=false 并带原因。
+        token_ok = bool(config.token)
+        source_ok = config.mock or config.source_root.is_dir()
+        chromium_ok = config.mock or _probe_chromium()
+        reasons: list[str] = []
+        if not token_ok:
+            reasons.append("UZI_WORKER_TOKEN 未配置")
+        if not source_ok:
+            reasons.append(f"UZI_SOURCE_ROOT 不存在: {config.source_root}")
+        if not chromium_ok:
+            reasons.append("Chromium 不可用")
         return {
             "status": "ok",
+            "ready": token_ok and source_ok and chromium_ok,
+            "reason": "; ".join(reasons) if reasons else None,
             "worker_version": app.state.uzi_commit,
             "uzi_commit": app.state.uzi_commit,
-            "chromium_available": _probe_chromium(),
+            "chromium_available": chromium_ok,
             "mock": bool(config.mock),
             "active_jobs": active,
             "queued_jobs": queued,
-            "token_configured": bool(config.token),
+            "token_configured": token_ok,
         }
 
     # ── 受保护路由：全部要求 Token ──────────────────────────

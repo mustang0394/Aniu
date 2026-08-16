@@ -422,10 +422,15 @@ def _extract_string(payload: Any, key: str) -> str | None:
 
 # ── MX Key 处理（文档 §8：临时传递 + 日志脱敏）──────────────
 def env_patch(*, mx_api_key: str | None) -> None:
-    """把 MX Key 写入子进程环境变量并登记脱敏；仅在内存中使用。"""
+    """把 MX Key 写入子进程环境变量并登记脱敏；仅在内存中使用。
+
+    - ``MX_APIKEY``：上游 UZI 代码实际读取的环境变量（review P2）。
+    - ``UZI_MX_API_KEY``：兼容别名（历史名称）。
+    """
     from app.sanitize import register_secret
 
     if mx_api_key:
+        os.environ["MX_APIKEY"] = mx_api_key
         os.environ["UZI_MX_API_KEY"] = mx_api_key
         register_secret(mx_api_key)
 

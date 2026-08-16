@@ -52,6 +52,17 @@ def test_full_flow_reaches_completed(monkeypatch, tmp_path) -> None:
             assert job.summary_json is not None
             assert job.summary_json.get("verdict") == "谨慎看多"
             assert job.artifact_manifest_json is not None
+            # P1回归（review问题2）：归一化后详情摘要字段非空
+            sj = job.summary_json
+            assert sj.get("valuation", {}).get("rating") == "买入", "估值评级应来自 institutional_modeling.initiating_rating"
+            assert sj.get("valuation", {}).get("target_price") == 1850.0
+            assert sj.get("catalysts") == ["Q2 业绩预告", "分红派息", "新品发布"], "催化剂应来自 dashboard.intelligence.catalysts"
+            assert sj.get("panel", {}).get("bullish") == 21, "投资者统计应来自 panel.json.signal_distribution"
+            assert sj.get("panel", {}).get("bearish") == 12
+            assert sj.get("data_gaps", {}).get("coverage_pct") == 92.0, "数据缺口应来自 synthesis.data_gaps"
+            assert sj.get("data_gaps", {}).get("unresolved") == 1
+            assert sj.get("data_as_of") == "2026-08-16T00:00:00"
+            assert "贵州茅台" in sj.get("one_liner", ""), "one_liner 应来自 artifacts/one-liner.txt"
     _reset()
 
 

@@ -76,9 +76,13 @@ def get_uzi_status(
         reason = "UZI 模块未启用。"
     elif health is None:
         reason = "UZI Worker 未配置或不可用。"
+    elif not health.get("ready"):
+        # Worker 健康但未就绪（token/源码/chromium 问题，review 问题9）
+        reason = str(health.get("reason") or "UZI Worker 未就绪。")
+    worker_available = health is not None and bool(health.get("ready"))
     return UziStatusRead(
         enabled=settings.uzi_enabled,
-        worker_available=health is not None,
+        worker_available=worker_available,
         worker_version=(
             str(health.get("uzi_commit") or health.get("worker_version") or "")
             if health

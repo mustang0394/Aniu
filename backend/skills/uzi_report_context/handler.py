@@ -265,6 +265,9 @@ class Skill(BaseSkill):
                             ),
                         }
             else:
+                # 按 ticker 查询最新完成报告：同时匹配标准代码、原始输入、公司名
+                # （review 问题10：此前只匹配前两者，按公司名查询查不到）。
+                ticker_pattern = f"%{ticker}%"
                 job = db.scalar(
                     select(UziReportJob)
                     .where(
@@ -272,6 +275,7 @@ class Skill(BaseSkill):
                         or_(
                             UziReportJob.ticker_normalized == ticker,
                             UziReportJob.ticker_input == ticker,
+                            UziReportJob.company_name.ilike(ticker_pattern),
                         ),
                     )
                     .order_by(UziReportJob.created_at.desc())

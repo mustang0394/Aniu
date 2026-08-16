@@ -69,7 +69,11 @@ def test_orchestrator_call_llm_uses_api_key_locally(monkeypatch, tmp_path) -> No
     from types import SimpleNamespace
     import json
 
-    from tests.uzi_test_helpers import valid_uzi_synthesis, write_fake_stage1
+    from tests.uzi_test_helpers import (
+        fake_llm_content_for_subtask,
+        valid_uzi_synthesis,
+        write_fake_stage1,
+    )
     from app.services.uzi_llm_orchestrator import UziLlmOrchestrator
 
     write_fake_stage1(tmp_path / "uzi_reports", 1)
@@ -93,7 +97,7 @@ def test_orchestrator_call_llm_uses_api_key_locally(monkeypatch, tmp_path) -> No
             elif "一致性" in sys_text:
                 content = json.dumps({"ok": True})
             else:
-                content = json.dumps({"topic": "t", "conclusions": []})
+                content = fake_llm_content_for_subtask(sys_text)
             return {"choices": [{"message": {"content": content, "tool_calls": []}}]}
 
         def run_structured_json_call(self, **kwargs):

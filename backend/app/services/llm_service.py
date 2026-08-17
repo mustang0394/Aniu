@@ -1709,7 +1709,13 @@ class LLMService:
                 )
             except LLMUpstreamError as exc:
                 last_error = exc
-                if not include_usage or exc.status_code != 400:
+                error_text = str(exc).casefold()
+                is_reasoning_replay_error = "reasoning_content" in error_text
+                if (
+                    not include_usage
+                    or exc.status_code != 400
+                    or is_reasoning_replay_error
+                ):
                     raise
 
         if last_error is not None:

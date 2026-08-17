@@ -30,6 +30,7 @@ from app.core.config import get_settings
 from app.db.models import AppSettings
 from app.services.llm_service import (
     LLMService,
+    LLMUpstreamError,
     _to_text_content,
     normalize_max_retries,
 )
@@ -80,6 +81,8 @@ _UZI_PROMPT_VERSION = "uzi-review-v1"
 
 # 单个子任务内部的最大工具调用轮次（每轮一次 LLM 往返）。
 _MAX_SUBTASK_TOOL_ROUNDS = 6
+# 工具阶段结束后，最多执行两轮不带工具的强制 JSON 收尾。
+_MAX_SUBTASK_JSON_ROUNDS = 2
 # 子任务并发上限（§13.3）。
 _UZI_MAX_PARALLEL = 4
 # stage1 各文件进入上下文的单文件字符上限与总上限。
@@ -210,6 +213,9 @@ class UziLlmOrchestrator:
 
         self._llm: LLMService = llm_service or default_llm_service
         self._deadline: float | None = None
+        self._report_id: int | None = None
+        self._diagnostic_path: Path | None = None
+        self._diagnostic_lock = threading.Lock()
 
     def _check_deadline(self) -> None:
         """子任务检查点：超过总 deadline 立即中止（§13.5 / review P1 超时）。"""
@@ -273,9 +279,11 @@ class UziLlmOrchestrator:
         """
         self._ensure_llm_config(app_settings)
         self._deadline = deadline
+        self._report_id = report_id
 
         root = Path(report_root or get_settings().uzi_report_root).resolve()
         work_dir = root / str(report_id) / "work"
+        self._diagnostic_path = work_dir / "llm-review.log"
         stage1 = self._load_stage1(work_dir)
         stage1_text = self._build_stage1_text(stage1)
 
@@ -745,6 +753,143 @@ class UziLlmOrchestrator:
         return results
 
     # ── 单子任务受限 agent 循环 ──────────────────────────
+    def _build_subtask_payload(
+        self,
+        *,
+        app_settings: AppSettings,
+        messages: list[dict[str, Any]],
+        allow_tools: bool,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": app_settings.llm_model,
+            "temperature": 0.2,
+            "messages": messages,
+        }
+        if allow_tools:
+            tools = self.build_tools()
+            if tools:
+                payload["tools"] = tools
+                payload["tool_choice"] = "auto"
+        reasoning_effort = str(
+            getattr(app_settings, "llm_reasoning_effort", "") or ""
+        ).strip()
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
+        return payload
+
+    @staticmethod
+    def _assistant_tool_message(
+        message: dict[str, Any],
+        *,
+        app_settings: AppSettings,
+    ) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "role": "assistant",
+            "content": _to_text_content(message.get("content")) or "",
+            "tool_calls": message.get("tool_calls") or [],
+        }
+        if (
+            bool(
+                getattr(
+                    app_settings,
+                    "llm_enable_reasoning_content_echo",
+                    False,
+                )
+            )
+            and message.get("reasoning_content")
+        ):
+            entry["reasoning_content"] = message["reasoning_content"]
+        return entry
+
+    def _log_subtask_response(
+        self,
+        *,
+        subtask_id: str,
+        phase: str,
+        round_number: int,
+        response_payload: dict[str, Any],
+        content: str,
+        tool_calls: list[Any],
+        json_valid: bool | None,
+    ) -> None:
+        choices = response_payload.get("choices") or []
+        choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+        usage = response_payload.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        tool_names: list[str] = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function_payload = tool_call.get("function")
+            if isinstance(function_payload, dict):
+                name = str(function_payload.get("name") or "").strip()
+                if name:
+                    tool_names.append(name)
+        logger.info(
+            "UZI LLM response: report_id=%s subtask=%s phase=%s round=%s "
+            "finish_reason=%s content_chars=%s tool_calls=%s tools=%s "
+            "json_valid=%s prompt_tokens=%s completion_tokens=%s",
+            self._report_id,
+            subtask_id,
+            phase,
+            round_number,
+            choice.get("finish_reason"),
+            len(content),
+            len(tool_calls),
+            ",".join(tool_names) or "-",
+            json_valid,
+            usage.get("prompt_tokens"),
+            usage.get("completion_tokens"),
+        )
+        self._write_diagnostic(
+            {
+                "event": "llm_response",
+                "subtask": subtask_id,
+                "phase": phase,
+                "round": round_number,
+                "finish_reason": choice.get("finish_reason"),
+                "content_chars": len(content),
+                "tool_calls": len(tool_calls),
+                "tools": tool_names,
+                "json_valid": json_valid,
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "completion_tokens": usage.get("completion_tokens"),
+            }
+        )
+
+    def _write_diagnostic(self, event: dict[str, Any]) -> None:
+        """Write non-sensitive per-report LLM metadata for failed-run diagnosis."""
+        path = self._diagnostic_path
+        if path is None:
+            return
+        record = {
+            "ts": _now_iso(),
+            "report_id": self._report_id,
+            **event,
+        }
+        try:
+            with self._diagnostic_lock:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:  # pragma: no cover - diagnostics must never fail a report
+            logger.debug("无法写入 UZI LLM 诊断日志: %s", path, exc_info=True)
+
+    @staticmethod
+    def _forced_json_prompt(*, finish_reason: str | None = None) -> str:
+        if finish_reason == "length":
+            return (
+                "工具查询阶段已经结束。上一轮输出因长度限制而不完整。"
+                "请压缩 headline、reasoning、comment 和证据表述，但仍覆盖所有"
+                "必需字段与指定 investor_id；只输出一个完整合法 JSON 对象。"
+                "不得调用工具，不要输出 Markdown 或解释文字。"
+            )
+        return (
+            "工具查询阶段已经结束。请立即基于以上 Stage 1 数据和工具结果，"
+            "只输出一个符合原始结构要求的完整合法 JSON 对象。不得再调用工具，"
+            "不要输出 Markdown、解释文字或隐藏推理。"
+        )
+
     def _run_subtask(
         self,
         *,
@@ -771,25 +916,20 @@ class UziLlmOrchestrator:
             app_settings=app_settings,
         )
 
-        for _round in range(_MAX_SUBTASK_TOOL_ROUNDS):
+        tool_rounds_used = 0
+        last_finish_reason: str | None = None
+        last_content_chars = 0
+
+        for round_number in range(1, _MAX_SUBTASK_TOOL_ROUNDS + 1):
             self._raise_if_cancelled(cancel_event)
             self._check_deadline()
-            payload = {
-                "model": app_settings.llm_model,
-                "temperature": 0.2,
-                "messages": messages,
-                "tools": self.build_tools(),
-                "tool_choice": "auto",
-            }
-            reasoning_effort = str(
-                getattr(app_settings, "llm_reasoning_effort", "") or ""
-            ).strip()
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
-
             response_payload = self._call_llm(
                 app_settings=app_settings,
-                payload=payload,
+                payload=self._build_subtask_payload(
+                    app_settings=app_settings,
+                    messages=messages,
+                    allow_tools=True,
+                ),
                 cancel_event=cancel_event,
             )
             choices = response_payload.get("choices") or []
@@ -798,18 +938,33 @@ class UziLlmOrchestrator:
                     ERROR_LLM_REVIEW_FAILED,
                     f"子任务 {subtask['id']} 未返回有效响应。",
                 )
-            message = choices[0].get("message") or {}
-            tool_calls = message.get("tool_calls") or []
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = choice.get("message") or {}
+            message = message if isinstance(message, dict) else {}
+            raw_tool_calls = message.get("tool_calls") or []
+            tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+            content = _to_text_content(message.get("content"))
+            last_finish_reason = str(choice.get("finish_reason") or "").strip() or None
+            last_content_chars = len(content)
 
             if tool_calls:
+                tool_rounds_used += 1
+                self._log_subtask_response(
+                    subtask_id=str(subtask["id"]),
+                    phase="tool",
+                    round_number=round_number,
+                    response_payload=response_payload,
+                    content=content,
+                    tool_calls=tool_calls,
+                    json_valid=None,
+                )
                 # 先追加含 tool_calls 的 assistant 消息（OpenAI 消息序列要求：
                 # tool 消息前必须有对应 tool_calls 的 assistant 消息）。
                 messages.append(
-                    {
-                        "role": "assistant",
-                        "content": _to_text_content(message.get("content")) or "",
-                        "tool_calls": tool_calls,
-                    }
+                    self._assistant_tool_message(
+                        message,
+                        app_settings=app_settings,
+                    )
                 )
                 for tool_call in tool_calls:
                     if not isinstance(tool_call, dict):
@@ -850,23 +1005,93 @@ class UziLlmOrchestrator:
                     )
                 continue
 
-            content = _to_text_content(message.get("content"))
             parsed = _extract_json_object(content)
+            self._log_subtask_response(
+                subtask_id=str(subtask["id"]),
+                phase="tool",
+                round_number=round_number,
+                response_payload=response_payload,
+                content=content,
+                tool_calls=tool_calls,
+                json_valid=isinstance(parsed, dict),
+            )
             if isinstance(parsed, dict):
                 return parsed
-            # 定向纠正一次：要求输出合法 JSON（§13.5 仅限结构问题）。
+            logger.warning(
+                "UZI LLM JSON parse failed: report_id=%s subtask=%s phase=tool "
+                "round=%s finish_reason=%s content_chars=%s",
+                self._report_id,
+                subtask["id"],
+                round_number,
+                last_finish_reason,
+                last_content_chars,
+            )
+            break
+
+        # 工具轮次与最终输出轮次分离，避免模型连续查询工具后没有机会收尾。
+        for json_round in range(1, _MAX_SUBTASK_JSON_ROUNDS + 1):
             messages.append(
                 {
                     "role": "user",
-                    "content": (
-                        "你上一轮输出不是合法 JSON 对象。请仅输出一个"
-                        "符合要求的 JSON 对象，不要包含任何解释文字。"
+                    "content": self._forced_json_prompt(
+                        finish_reason=last_finish_reason,
                     ),
                 }
             )
+            self._raise_if_cancelled(cancel_event)
+            self._check_deadline()
+            response_payload = self._call_llm(
+                app_settings=app_settings,
+                payload=self._build_subtask_payload(
+                    app_settings=app_settings,
+                    messages=messages,
+                    allow_tools=False,
+                ),
+                cancel_event=cancel_event,
+            )
+            choices = response_payload.get("choices") or []
+            if not choices:
+                raise UziReviewError(
+                    ERROR_LLM_REVIEW_FAILED,
+                    f"子任务 {subtask['id']} 强制 JSON 收尾未返回有效响应。",
+                )
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = choice.get("message") or {}
+            message = message if isinstance(message, dict) else {}
+            raw_tool_calls = message.get("tool_calls") or []
+            tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+            content = _to_text_content(message.get("content"))
+            parsed = _extract_json_object(content)
+            last_finish_reason = str(choice.get("finish_reason") or "").strip() or None
+            last_content_chars = len(content)
+            self._log_subtask_response(
+                subtask_id=str(subtask["id"]),
+                phase="final_json",
+                round_number=json_round,
+                response_payload=response_payload,
+                content=content,
+                tool_calls=tool_calls,
+                json_valid=isinstance(parsed, dict),
+            )
+            if isinstance(parsed, dict):
+                return parsed
+            logger.warning(
+                "UZI LLM JSON parse failed: report_id=%s subtask=%s "
+                "phase=final_json round=%s finish_reason=%s content_chars=%s "
+                "unexpected_tool_calls=%s",
+                self._report_id,
+                subtask["id"],
+                json_round,
+                last_finish_reason,
+                last_content_chars,
+                len(tool_calls),
+            )
         raise UziReviewError(
             ERROR_LLM_REVIEW_FAILED,
-            f"子任务 {subtask['id']} 未能产出合法 JSON 结果。",
+            f"子任务 {subtask['id']} 未能产出合法 JSON 结果"
+            f"（工具轮次={tool_rounds_used}，强制 JSON 轮次="
+            f"{_MAX_SUBTASK_JSON_ROUNDS}，finish_reason="
+            f"{last_finish_reason or 'unknown'}，响应字符={last_content_chars}）。",
         )
 
     def _call_llm(
@@ -911,6 +1136,16 @@ class UziLlmOrchestrator:
                 raise
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                if (
+                    isinstance(exc, LLMUpstreamError)
+                    and exc.status_code is not None
+                    and 400 <= exc.status_code < 500
+                    and exc.status_code not in {408, 409, 429}
+                ):
+                    raise UziReviewError(
+                        ERROR_LLM_REVIEW_FAILED,
+                        f"大模型调用失败（不可重试的 {exc.status_code}）：{exc}",
+                    ) from exc
                 if attempt >= budget:
                     raise UziReviewError(
                         ERROR_LLM_REVIEW_FAILED,

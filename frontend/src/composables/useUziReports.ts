@@ -11,6 +11,7 @@ import type {
   CreateUziReportResponse,
   UziReportStatus,
   UziReportSummary,
+  UziSourceStatus,
   UziStatus,
 } from '@/types'
 import { UZI_TERMINAL_STATUSES } from '@/types'
@@ -19,6 +20,10 @@ const PAGE_SIZE = 20
 
 export function useUziReports() {
   const uziStatus = ref<UziStatus | null>(null)
+  const sourceStatus = ref<UziSourceStatus | null>(null)
+  const sourceUpdating = ref(false)
+  const sourceUpdateError = ref('')
+  const sourceUpdateNotice = ref('')
   const statusLoading = ref(false)
 
   const items = ref<UziReportSummary[]>([])
@@ -61,6 +66,32 @@ export function useUziReports() {
       createError.value = listError.value || 'UZI 状态检测失败，暂时无法创建报告。'
     } finally {
       statusLoading.value = false
+    }
+  }
+
+  async function fetchSourceStatus(): Promise<void> {
+    try {
+      sourceStatus.value = await api.getUziSourceStatus()
+    } catch (err) {
+      sourceStatus.value = null
+      sourceUpdateError.value = (err as Error).message || '获取 UZI 上游版本失败。'
+    }
+  }
+
+  async function updateSource(): Promise<boolean> {
+    sourceUpdating.value = true
+    sourceUpdateError.value = ''
+    sourceUpdateNotice.value = ''
+    try {
+      sourceStatus.value = await api.updateUziSource()
+      sourceUpdateNotice.value = sourceStatus.value.message || 'UZI 上游源码已更新。'
+      await fetchStatus()
+      return true
+    } catch (err) {
+      sourceUpdateError.value = (err as Error).message || 'UZI 上游更新失败。'
+      return false
+    } finally {
+      sourceUpdating.value = false
     }
   }
 
@@ -158,6 +189,10 @@ export function useUziReports() {
 
   return {
     uziStatus,
+    sourceStatus,
+    sourceUpdating,
+    sourceUpdateError,
+    sourceUpdateNotice,
     statusLoading,
     moduleEnabled,
     workerReady,
@@ -179,6 +214,8 @@ export function useUziReports() {
     deletingId,
     activeItems,
     fetchStatus,
+    fetchSourceStatus,
+    updateSource,
     fetchList,
     goToPage,
     applyFilter,

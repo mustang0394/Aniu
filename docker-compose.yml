@@ -28,13 +28,17 @@ services:
       # compose 变量插值来自根目录 .env 或 shell 导出；未设置时 Worker
       # 除健康检查外拒绝一切任务（安全默认，不提供弱值，文档 §8）。
       UZI_WORKER_TOKEN: ${UZI_WORKER_SHARED_SECRET:-}
-      UZI_SOURCE_ROOT: /opt/uzi
+      # 持久目录允许页面更新上游后跨容器重启保留；首次启动从 /opt/uzi 初始化。
+      UZI_SOURCE_ROOT: /app/data/uzi_source
+      UZI_BUNDLED_SOURCE_ROOT: /opt/uzi
       UZI_REPORT_ROOT: /app/data/uzi_reports
       UZI_WORKER_PORT: "9001"
       UZI_DEPTH: deep
       UZI_LITE: "0"
       UZI_NO_AUTO_OPEN: "1"
       UZI_PLAYWRIGHT_ENABLE: "1"
+      UZI_QUANT_MAX_FUNDS: "12"
+      UZI_QUANT_TIMEOUT_SECONDS: "45"
       PYTHONUNBUFFERED: "1"
     volumes:
       # 与主服务共享报告目录（Worker 写产物，主服务读并入库）。

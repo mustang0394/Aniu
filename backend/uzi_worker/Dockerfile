@@ -63,7 +63,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MALLOC_ARENA_MAX=2 \
     APP_ENV=docker \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-    UZI_SOURCE_ROOT=/opt/uzi \
+    UZI_SOURCE_ROOT=/app/data/uzi_source \
+    UZI_BUNDLED_SOURCE_ROOT=/opt/uzi \
     UZI_REPORT_ROOT=/app/data/uzi_reports \
     UZI_WORKER_PORT=9001 \
     UZI_DEPTH=deep \
@@ -71,7 +72,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UZI_NO_AUTO_OPEN=1 \
     UZI_PLAYWRIGHT_ENABLE=1 \
     UZI_STAGE2_TIMEOUT_SECONDS=600 \
-    UZI_RENDER_TIMEOUT_SECONDS=90
+    UZI_RENDER_TIMEOUT_SECONDS=90 \
+    UZI_QUANT_MAX_FUNDS=12 \
+    UZI_QUANT_TIMEOUT_SECONDS=45
 
 WORKDIR /app/worker
 
@@ -100,7 +103,7 @@ COPY uzi-source.lock ./uzi-source.lock
 # 固定上游源码（含 LICENSE）。
 COPY --from=uzi-source /opt/uzi /opt/uzi
 
-RUN mkdir -p /app/data/uzi_reports \
+RUN mkdir -p /app/data/uzi_reports /app/data \
     && test -d /opt/uzi
 
 EXPOSE 9001

@@ -63,6 +63,8 @@ STAGE2_ARTIFACT_FILES = (
 
 _ACTIVE_RENDER_LOCK = threading.Lock()
 _ACTIVE_RENDER_PROCESS: subprocess.Popen | None = None
+_ACTIVE_QUANT_LOCK = threading.Lock()
+_ACTIVE_QUANT_PROCESS: subprocess.Popen | None = None
 
 # 上游 stage2 生成的 HTML 文件名（standalone 独立版，已内联头像资源）。
 UPSTREAM_HTML_NAME = "full-report-standalone.html"
@@ -112,6 +114,9 @@ def _load_run_real_test(scripts_dir: Path) -> Any:
     try:
         # 每个任务使用独立源码副本：强制重新导入，避免跨任务/跨测试模块缓存串数据。
         sys.modules.pop("run_real_test", None)
+        for module_name in list(sys.modules):
+            if module_name == "lib" or module_name.startswith("lib."):
+                sys.modules.pop(module_name, None)
         import run_real_test  # noqa: PLC0415 - 受控加载上游入口
 
         return run_real_test
@@ -223,6 +228,8 @@ def run_stage2(
     source_root: Path,
     mock: bool,
     render_timeout_seconds: int = 90,
+    quant_max_funds: int = 12,
+    quant_timeout_seconds: int = 45,
 ) -> StageResult:
     """执行 Stage 2：综合与报告渲染。
 
@@ -262,8 +269,14 @@ def run_stage2(
 
     cwd_before = os.getcwd()
     restore_renderers = None
+    restore_quant_signal = None
     try:
         os.chdir(scripts_dir)
+        restore_quant_signal = _install_bounded_quant_signal(
+            scripts_dir=scripts_dir,
+            max_funds=max(1, int(quant_max_funds)),
+            timeout_seconds=max(1, int(quant_timeout_seconds)),
+        )
         restore_renderers = _install_bounded_renderers(
             scripts_dir=scripts_dir,
             timeout_seconds=max(1, int(render_timeout_seconds)),
@@ -279,6 +292,8 @@ def run_stage2(
     finally:
         if restore_renderers is not None:
             restore_renderers()
+        if restore_quant_signal is not None:
+            restore_quant_signal()
         os.chdir(cwd_before)
 
     return _collect_stage2_output(
@@ -287,6 +302,183 @@ def run_stage2(
         raw_output=output,
         ticker=normalized_ticker,
     )
+
+
+def _empty_quant_signal(reason: str = "") -> dict[str, Any]:
+    """返回上游 ``detect_quant_signal`` 可接受的降级结果。"""
+    result: dict[str, Any] = {
+        "count": 0,
+        "quant_funds": [],
+        "active_funds_total": 0,
+        "quant_funds_total": 0,
+        "is_quant_factor_style": False,
+    }
+    if reason:
+        result["fallback_reason"] = reason[:200]
+    return result
+
+
+def _install_bounded_quant_signal(
+    *, scripts_dir: Path, max_funds: int, timeout_seconds: int
+):
+    """限制上游基金样本，并让可选的量化风格识别可以独立超时降级。
+
+    上游会在 Stage 2 的 ``detect_style`` 内同步调用 AkShare 查询基金持仓。
+    这些查询没有单请求超时，且传入基金列表时不会应用 ``max_funds``。
+    这里同时截断输入列表，并在隔离进程中执行整个识别步骤。失败只返回
+    “未识别为量化风格”，不阻断后续综合、HTML 和图片渲染。
+    """
+    quant_path = scripts_dir / "lib" / "quant_signal.py"
+    if not quant_path.is_file():
+        return lambda: None
+
+    try:
+        quant_module = importlib.import_module("lib.quant_signal")
+    except Exception as exc:  # noqa: BLE001 - 上游可选模块不可用时直接降级
+        logger.warning("UZI 量化风格模块不可用，已跳过: %s", exc)
+        return lambda: None
+
+    original = getattr(quant_module, "detect_quant_signal", None)
+    if not callable(original):
+        return lambda: None
+
+    configured_limit = max(1, int(max_funds))
+
+    def bounded_detect(
+        stock_code: str,
+        fund_managers: Any = None,
+        max_funds: int = 80,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del args, kwargs
+        try:
+            requested_limit = max(1, int(max_funds))
+        except (TypeError, ValueError):
+            requested_limit = configured_limit
+        effective_limit = min(configured_limit, requested_limit)
+        managers = fund_managers
+        if isinstance(managers, (list, tuple)):
+            managers = list(managers)[:effective_limit]
+        print(
+            f"\n🔎 UZI 基金风格识别：最多 {effective_limit} 只基金，"
+            f"超时 {timeout_seconds} 秒后自动跳过。",
+            flush=True,
+        )
+        progress_marker = (
+            scripts_dir / ".cache" / str(stock_code or "") / ".aniu-quant-running.json"
+        )
+        try:
+            progress_marker.parent.mkdir(parents=True, exist_ok=True)
+            progress_marker.write_text(
+                json.dumps(
+                    {"max_funds": effective_limit, "timeout_seconds": timeout_seconds}
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        try:
+            result = _run_bounded_quant_signal(
+                scripts_dir=scripts_dir,
+                stock_code=str(stock_code or ""),
+                fund_managers=managers,
+                max_funds=effective_limit,
+                timeout_seconds=timeout_seconds,
+            )
+            print("✓ 基金风格识别完成，继续综合报告。", flush=True)
+            return result
+        except Exception as exc:  # noqa: BLE001 - 可选增强失败必须继续主报告
+            reason = _safe_exc_text(exc)
+            logger.warning("UZI 基金风格识别已降级: %s", reason)
+            print(f"⚠️ 基金风格识别已跳过：{reason}；继续综合报告。", flush=True)
+            return _empty_quant_signal(reason)
+        finally:
+            try:
+                progress_marker.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    quant_module.detect_quant_signal = bounded_detect
+
+    def restore() -> None:
+        quant_module.detect_quant_signal = original
+
+    return restore
+
+
+def _run_bounded_quant_signal(
+    *,
+    scripts_dir: Path,
+    stock_code: str,
+    fund_managers: Any,
+    max_funds: int,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    """在独立进程组执行上游量化基金识别，并返回 JSON 结果。"""
+    marker = "__ANIU_UZI_QUANT_RESULT__"
+    code = (
+        "import json,sys; "
+        "from lib.quant_signal import detect_quant_signal; "
+        "p=json.loads(sys.stdin.read()); "
+        "r=detect_quant_signal(p['stock_code'], p.get('fund_managers'), "
+        "max_funds=int(p['max_funds'])); "
+        f"print('{marker}'+json.dumps(r, ensure_ascii=False))"
+    )
+    payload = json.dumps(
+        {
+            "stock_code": stock_code,
+            "fund_managers": fund_managers,
+            "max_funds": max(1, int(max_funds)),
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+    env = dict(os.environ)
+    # 上游默认 1 是为规避 AkShare/mini-racer 的线程安全问题；保持串行。
+    env["UZI_QUANT_WORKERS"] = "1"
+    proc = subprocess.Popen(  # noqa: S603 - 固定解释器与代码，不经过 shell
+        [sys.executable, "-c", code],
+        cwd=str(scripts_dir),
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=(os.name == "posix"),
+    )
+    global _ACTIVE_QUANT_PROCESS
+    with _ACTIVE_QUANT_LOCK:
+        _ACTIVE_QUANT_PROCESS = proc
+    try:
+        try:
+            output, _ = proc.communicate(input=payload, timeout=timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            _terminate_helper_process(proc)
+            raise TimeoutError(
+                f"基金风格识别超过 {timeout_seconds} 秒"
+            ) from exc
+    finally:
+        with _ACTIVE_QUANT_LOCK:
+            if _ACTIVE_QUANT_PROCESS is proc:
+                _ACTIVE_QUANT_PROCESS = None
+
+    if proc.returncode != 0:
+        tail = str(output or "").strip().splitlines()[-1:] or [""]
+        raise RuntimeError(f"基金风格识别进程失败：{tail[0][:160]}")
+    result_line = next(
+        (line for line in reversed(str(output or "").splitlines()) if line.startswith(marker)),
+        "",
+    )
+    if not result_line:
+        raise RuntimeError("基金风格识别未返回结果")
+    try:
+        result = json.loads(result_line[len(marker):])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("基金风格识别返回了非法 JSON") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("基金风格识别结果不是对象")
+    return result
 
 
 def _install_bounded_renderers(*, scripts_dir: Path, timeout_seconds: int):
@@ -358,7 +550,7 @@ def _run_bounded_renderer(
     try:
         exit_code = proc.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
-        _terminate_renderer_process(proc)
+        _terminate_helper_process(proc)
         raise TimeoutError(
             f"{out_name} 渲染超过 {timeout_seconds} 秒，已跳过。"
         ) from exc
@@ -382,7 +574,7 @@ def _run_bounded_renderer(
     return output_path
 
 
-def _terminate_renderer_process(proc: subprocess.Popen) -> None:
+def _terminate_helper_process(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
     try:
@@ -406,12 +598,21 @@ def _terminate_renderer_process(proc: subprocess.Popen) -> None:
         pass
 
 
-def terminate_active_renderer() -> None:
-    """供 Worker 取消信号处理器回收当前 Playwright 进程组。"""
+def terminate_active_helpers() -> None:
+    """供取消信号处理器回收量化查询和 Playwright 隔离进程。"""
+    with _ACTIVE_QUANT_LOCK:
+        quant_proc = _ACTIVE_QUANT_PROCESS
+    if quant_proc is not None:
+        _terminate_helper_process(quant_proc)
     with _ACTIVE_RENDER_LOCK:
-        proc = _ACTIVE_RENDER_PROCESS
-    if proc is not None:
-        _terminate_renderer_process(proc)
+        render_proc = _ACTIVE_RENDER_PROCESS
+    if render_proc is not None:
+        _terminate_helper_process(render_proc)
+
+
+def terminate_active_renderer() -> None:
+    """向后兼容旧调用方；现在会回收全部 Stage 2 辅助进程。"""
+    terminate_active_helpers()
 
 
 def _build_stage1_manifest(

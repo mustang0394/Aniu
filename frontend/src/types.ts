@@ -379,6 +379,22 @@ export interface UziStatus {
   reason: string | null
 }
 
+export interface UziSourceStatus {
+  repository: string
+  current_commit: string
+  current_version: string
+  latest_commit: string | null
+  latest_version: string | null
+  update_available: boolean
+  updated: boolean
+  checked_at: string
+  can_update: boolean
+  active_jobs: number
+  reason: string | null
+  error: string | null
+  message: string | null
+}
+
 /** 标准化摘要（文档 §9.1）：字段允许为空但不允许随意改名。 */
 export interface UziValuationSummary {
   rating: string

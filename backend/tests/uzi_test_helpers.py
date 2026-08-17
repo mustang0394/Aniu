@@ -32,6 +32,7 @@ class FakeWorkerClient(UziWorkerClient):
         self.stage1_fail_code: str | None = None
         self.stage2_fail_code: str | None = None
         self.cancelled: list[int] = []
+        self.source_commit = "7bc779dd15ca4a741fcda20319a431f283232366"
 
     def health(self) -> dict | None:
         if not self.available:
@@ -165,6 +166,37 @@ class FakeWorkerClient(UziWorkerClient):
         if report_id in self.jobs:
             self.jobs[report_id]["status"] = "cancelled"
         return {"job": self.jobs.get(report_id, {})}
+
+    def source_status(self, *, check_latest=False):
+        latest = "8" * 40 if check_latest else None
+        return {
+            "repository": "https://github.com/wbh604/UZI-Skill",
+            "current_commit": self.source_commit,
+            "current_version": self.source_commit[:7],
+            "latest_commit": latest,
+            "latest_version": latest[:7] if latest else None,
+            "update_available": bool(latest and latest != self.source_commit),
+            "updated": False,
+            "checked_at": "2026-08-17T00:00:00+00:00",
+            "can_update": True,
+            "active_jobs": 0,
+            "reason": None,
+            "error": None,
+            "message": None,
+        }
+
+    def update_source(self):
+        self.source_commit = "8" * 40
+        payload = self.source_status(check_latest=False)
+        payload.update(
+            {
+                "latest_commit": self.source_commit,
+                "latest_version": self.source_commit[:7],
+                "updated": True,
+                "message": "UZI 上游源码已更新，新任务将使用新版本。",
+            }
+        )
+        return payload
 
 
 def create_uzi_test_client(

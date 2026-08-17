@@ -21,6 +21,7 @@ from app.schemas.uzi import (
     UziReportDetailRead,
     UziReportListResponse,
     UziStatusRead,
+    UziSourceStatusRead,
 )
 from app.services.uzi_report_service import (
     ERROR_DISABLED,
@@ -28,6 +29,8 @@ from app.services.uzi_report_service import (
     ERROR_LLM_NOT_CONFIGURED,
     ERROR_QUEUE_FULL,
     ERROR_WORKER_UNAVAILABLE,
+    ERROR_UPDATE_BUSY,
+    ERROR_UPDATE_FAILED,
     uzi_report_service,
 )
 
@@ -41,6 +44,8 @@ _ERROR_STATUS_MAP = {
     ERROR_INVALID_TICKER: 422,
     ERROR_LLM_NOT_CONFIGURED: 422,
     "UZI_RATE_LIMITED": 429,
+    ERROR_UPDATE_BUSY: 409,
+    ERROR_UPDATE_FAILED: 502,
 }
 
 
@@ -93,6 +98,29 @@ def get_uzi_status(
         max_queued=settings.uzi_max_queued,
         reason=reason,
     )
+
+
+@router.get("/source/status", response_model=UziSourceStatusRead)
+def get_uzi_source_status(
+    _user: str = Depends(get_current_user),
+) -> UziSourceStatusRead:
+    try:
+        payload = uzi_report_service.get_source_status()
+    except RuntimeError as exc:
+        _raise_http(exc)
+    return UziSourceStatusRead(**payload)
+
+
+@router.post("/source/update", response_model=UziSourceStatusRead)
+def update_uzi_source(
+    db: Session = Depends(get_db),
+    _user: str = Depends(get_current_user),
+) -> UziSourceStatusRead:
+    try:
+        payload = uzi_report_service.update_source(db)
+    except RuntimeError as exc:
+        _raise_http(exc)
+    return UziSourceStatusRead(**payload)
 
 
 @router.post("/reports", response_model=UziReportCreateResponse, status_code=202)

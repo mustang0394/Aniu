@@ -77,6 +77,7 @@ class UziWorkerClient:
         path: str,
         *,
         json_body: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any] | None:
         """发送内部请求；Worker 不可达时返回 None（不抛异常）。"""
         if not self._enabled():
@@ -90,6 +91,11 @@ class UziWorkerClient:
                 f"{base}{path}",
                 headers=self._headers(),
                 json=json_body,
+                timeout=(
+                    timeout_seconds
+                    if timeout_seconds is not None
+                    else _DEFAULT_TIMEOUT_SECONDS
+                ),
             )
         except httpx.HTTPError as exc:
             logger.warning("UZI Worker 不可达: %s %s -> %s", method, path, exc)
@@ -172,6 +178,22 @@ class UziWorkerClient:
             return None
         job = payload.get("job")
         return job if isinstance(job, dict) else None
+
+    def source_status(self, *, check_latest: bool = False) -> dict[str, Any] | None:
+        suffix = "?check_latest=true" if check_latest else ""
+        try:
+            return self._request("GET", f"/internal/source/status{suffix}")
+        except WorkerJobPayloadError as exc:
+            logger.warning("查询 UZI 上游版本失败: %s", exc)
+            return None
+
+    def update_source(self) -> dict[str, Any] | None:
+        """检查并原子更新 Worker 上游源码；下载允许最多三分钟。"""
+        return self._request(
+            "POST",
+            "/internal/source/update",
+            timeout_seconds=180.0,
+        )
 
 
 uzi_worker_client = UziWorkerClient()

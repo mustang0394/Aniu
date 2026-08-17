@@ -7,9 +7,10 @@
 """
 from __future__ import annotations
 
-import json
 import logging
+import os
 import re
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from app.sanitize import (
     sanitize_error_message,
 )
 from app.state_store import StateStore
+from app.source_updater import SourceUpdateError, UziSourceManager
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +41,6 @@ _REPORT_ID_RE = re.compile(r"^\d{1,10}$")
 _TICKER_MAX_LENGTH = 64
 # 拒绝控制字符与路径/命令分隔类字符（输入只作函数参数，绝不进 shell）。
 _TICKER_INVALID_RE = re.compile(r"[\x00-\x1f\x7f/\\;\`$|<>&]")
-
-
-def _load_uzi_commit() -> str:
-    """从 uzi-source.lock 读取固定上游版本。"""
-    lock_path = Path(__file__).resolve().parent.parent / "uzi-source.lock"
-    try:
-        payload = json.loads(lock_path.read_text(encoding="utf-8"))
-        return str(payload.get("commit") or "")[:7]
-    except Exception:  # noqa: BLE001
-        return "unknown"
 
 
 def _probe_chromium() -> bool:
@@ -133,6 +125,12 @@ async def app_lifespan(app: FastAPI):
         config.source_root,
         config.mock,
     )
+    if not config.mock:
+        try:
+            app.state.source_manager.ensure_initialized()
+        except SourceUpdateError as exc:
+            logger.error("UZI 持久源码初始化失败: %s", exc)
+    os.environ["UZI_COMMIT"] = app.state.source_manager.current_commit()
     app.state.store = StateStore(config.report_root)
     app.state.runner = JobRunner(
         store=app.state.store,
@@ -153,7 +151,13 @@ def create_app() -> FastAPI:
     config = get_worker_config()
     app = FastAPI(title="aniu-uzi-worker", lifespan=app_lifespan)
 
-    app.state.uzi_commit = _load_uzi_commit()
+    bundled_lock_path = Path(__file__).resolve().parent.parent / "uzi-source.lock"
+    app.state.source_manager = UziSourceManager(
+        source_root=config.source_root,
+        bundled_source_root=config.bundled_source_root,
+        bundled_lock_path=bundled_lock_path,
+    )
+    app.state.source_operation_lock = threading.Lock()
 
     # ── 健康检查（豁免 Token，§11.1）───────────────────────
     @app.get("/internal/health")
@@ -166,7 +170,7 @@ def create_app() -> FastAPI:
         # readiness：区分 liveness 与就绪度（review 问题9）。
         # token 未配置/源码不存在/chromium 不可用时 ready=false 并带原因。
         token_ok = bool(config.token)
-        source_ok = config.mock or config.source_root.is_dir()
+        source_ok = config.mock or app.state.source_manager.is_ready()
         chromium_ok = config.mock or _probe_chromium()
         reasons: list[str] = []
         if not token_ok:
@@ -179,8 +183,8 @@ def create_app() -> FastAPI:
             "status": "ok",
             "ready": token_ok and source_ok and chromium_ok,
             "reason": "; ".join(reasons) if reasons else None,
-            "worker_version": app.state.uzi_commit,
-            "uzi_commit": app.state.uzi_commit,
+            "worker_version": app.state.source_manager.current_commit()[:7],
+            "uzi_commit": app.state.source_manager.current_commit()[:7],
             "chromium_available": chromium_ok,
             "mock": bool(config.mock),
             "active_jobs": active,
@@ -206,11 +210,13 @@ def create_app() -> FastAPI:
             )
         ticker = _validate_ticker(payload.ticker)
         try:
-            state = app.state.runner.submit_stage1(
-                report_id=report_id,
-                ticker=ticker,
-                mx_api_key=payload.mx_api_key,
-            )
+            # 与源码原子更新共用锁，防止检查完 active_jobs 后又有新任务复制旧目录。
+            with app.state.source_operation_lock:
+                state = app.state.runner.submit_stage1(
+                    report_id=report_id,
+                    ticker=ticker,
+                    mx_api_key=payload.mx_api_key,
+                )
         except JobAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except SourceMissingError as exc:
@@ -278,6 +284,43 @@ def create_app() -> FastAPI:
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"job": _state_response(state)}
+
+    @app.get("/internal/source/status")
+    def source_status(request: Request, check_latest: bool = False) -> dict:
+        _require_token(request)
+        payload = app.state.source_manager.status(check_latest=check_latest)
+        active = app.state.runner.active_jobs()
+        payload["can_update"] = not config.mock and active == 0
+        payload["active_jobs"] = active
+        if config.mock:
+            payload["reason"] = "Mock 模式不支持更新上游源码。"
+        elif active:
+            payload["reason"] = "有 UZI 报告正在执行，请等待任务结束后更新。"
+        else:
+            payload["reason"] = None
+        return payload
+
+    @app.post("/internal/source/update")
+    def update_source(request: Request) -> dict:
+        _require_token(request)
+        if config.mock:
+            raise HTTPException(status_code=409, detail="Mock 模式不支持更新上游源码。")
+        with app.state.source_operation_lock:
+            active = app.state.runner.active_jobs()
+            if active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="有 UZI 报告正在执行，请等待任务结束后更新。",
+                )
+            try:
+                payload = app.state.source_manager.update_to_latest()
+                os.environ["UZI_COMMIT"] = app.state.source_manager.current_commit()
+                payload["can_update"] = True
+                payload["active_jobs"] = 0
+                payload["reason"] = None
+                return payload
+            except SourceUpdateError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return app
 

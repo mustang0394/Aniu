@@ -25,6 +25,8 @@ def test_all_public_apis_require_jwt(monkeypatch, tmp_path) -> None:
     with client:
         # 无 token 全部 401。
         assert client.get("/api/aniu/uzi/status").status_code == 401
+        assert client.get("/api/aniu/uzi/source/status").status_code == 401
+        assert client.post("/api/aniu/uzi/source/update").status_code == 401
         assert client.get("/api/aniu/uzi/reports").status_code == 401
         assert client.post("/api/aniu/uzi/reports", json={"ticker": "600519.SH"}).status_code == 401
         assert client.get("/api/aniu/uzi/reports/1").status_code == 401
@@ -62,6 +64,21 @@ def test_status_worker_unavailable(monkeypatch, tmp_path) -> None:
         payload = response.json()
         assert payload["worker_available"] is False
         assert payload["reason"] is not None
+    _reset()
+
+
+def test_source_status_and_update_endpoints(monkeypatch, tmp_path) -> None:
+    client, worker = create_uzi_test_client(monkeypatch, tmp_path)
+    with client:
+        headers = auth_headers(client)
+        status = client.get("/api/aniu/uzi/source/status", headers=headers)
+        assert status.status_code == 200
+        assert status.json()["current_version"] == "7bc779d"
+
+        updated = client.post("/api/aniu/uzi/source/update", headers=headers)
+        assert updated.status_code == 200
+        assert updated.json()["updated"] is True
+        assert worker.source_commit == "8" * 40
     _reset()
 
 

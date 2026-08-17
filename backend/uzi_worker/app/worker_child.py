@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         UziStageError,
         run_stage1,
         run_stage2,
-        terminate_active_renderer,
+        terminate_active_helpers,
     )
     from app.config import get_worker_config
 
@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         import signal
 
         def _handle_termination(signum, _frame):
-            terminate_active_renderer()
+            terminate_active_helpers()
             raise SystemExit(128 + signum)
 
         signal.signal(signal.SIGTERM, _handle_termination)
@@ -132,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
                 source_root=Path(args.source_root),
                 mock=args.mock,
                 render_timeout_seconds=config.render_timeout_seconds,
+                quant_max_funds=config.quant_max_funds,
+                quant_timeout_seconds=config.quant_timeout_seconds,
             )
             if not result.success:
                 raise UziStageError(

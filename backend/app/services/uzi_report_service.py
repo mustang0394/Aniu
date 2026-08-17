@@ -69,6 +69,8 @@ ERROR_ARTIFACT_INVALID = "UZI_ARTIFACT_INVALID"
 ERROR_JOB_TIMEOUT = "UZI_JOB_TIMEOUT"
 ERROR_ORPHANED_JOB = "UZI_ORPHANED_JOB"
 ERROR_CANCELLED = "UZI_CANCELLED"
+ERROR_UPDATE_BUSY = "UZI_UPDATE_BUSY"
+ERROR_UPDATE_FAILED = "UZI_UPDATE_FAILED"
 
 # 输入校验（与 Worker 侧 _TICKER_INVALID_RE 一致）：拒绝控制字符、
 # 路径分隔符与明显命令字符。用户输入只作为函数参数传递，绝不拼接 Shell。
@@ -145,6 +147,8 @@ class UziReportService:
         # 创建限流（§8 UZI_CREATE_RATE_LIMIT_SECONDS）：client_ip → 上次创建时间。
         self._create_timestamps: dict[str, float] = {}
         self._create_lock = threading.Lock()
+        self._source_update_lock = threading.Lock()
+        self._source_update_in_progress = False
 
     def _check_create_rate_limit(self, client_ip: str) -> None:
         """同一登录来源创建新任务的最小间隔；复用任务不在此限（§10.2）。"""
@@ -227,6 +231,43 @@ class UziReportService:
     def _worker_health(self) -> dict[str, Any] | None:
         return self._worker.health()
 
+    def get_source_status(self) -> dict[str, Any]:
+        settings = get_settings()
+        if not settings.uzi_enabled:
+            raise RuntimeError(ERROR_DISABLED, "UZI 模块未启用。")
+        payload = self._worker.source_status(check_latest=False)
+        if payload is None:
+            raise RuntimeError(ERROR_WORKER_UNAVAILABLE, "UZI Worker 不可用。")
+        return payload
+
+    def update_source(self, db) -> dict[str, Any]:
+        """仅在无活动报告时更新上游，避免运行中切换源码。"""
+        settings = get_settings()
+        if not settings.uzi_enabled:
+            raise RuntimeError(ERROR_DISABLED, "UZI 模块未启用。")
+        with self._source_update_lock:
+            if self._source_update_in_progress:
+                raise RuntimeError(ERROR_UPDATE_BUSY, "UZI 上游更新正在进行。")
+            if self._count_active(db) > 0:
+                raise RuntimeError(
+                    ERROR_UPDATE_BUSY,
+                    "有 UZI 报告正在执行，请等待任务结束后再更新。",
+                )
+            self._source_update_in_progress = True
+        try:
+            try:
+                payload = self._worker.update_source()
+            except WorkerJobPayloadError as exc:
+                message = str(exc).strip() or "UZI 上游更新失败。"
+                code = ERROR_UPDATE_BUSY if "正在执行" in message else ERROR_UPDATE_FAILED
+                raise RuntimeError(code, message) from exc
+            if payload is None:
+                raise RuntimeError(ERROR_WORKER_UNAVAILABLE, "UZI Worker 不可用。")
+            return payload
+        finally:
+            with self._source_update_lock:
+                self._source_update_in_progress = False
+
     def _llm_config_ready(self, app_settings: AppSettings) -> bool:
         base_url = str(getattr(app_settings, "llm_base_url", "") or "").strip()
         api_key = str(getattr(app_settings, "llm_api_key", "") or "").strip()
@@ -239,6 +280,25 @@ class UziReportService:
         *,
         ticker: str,
         client_ip: str = "unknown",
+    ) -> tuple[UziReportJob, bool]:
+        with self._source_update_lock:
+            if self._source_update_in_progress:
+                raise RuntimeError(
+                    ERROR_UPDATE_BUSY,
+                    "UZI 上游更新正在进行，请稍后创建报告。",
+                )
+            return self._create_report_locked(
+                db,
+                ticker=ticker,
+                client_ip=client_ip,
+            )
+
+    def _create_report_locked(
+        self,
+        db,
+        *,
+        ticker: str,
+        client_ip: str,
     ) -> tuple[UziReportJob, bool]:
         settings = get_settings()
         if not settings.uzi_enabled:

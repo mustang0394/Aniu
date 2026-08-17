@@ -1,4 +1,4 @@
-import type { AccountOverview, AppSettings, ChatAttachment, ChatRequest, ChatResponse, ChatSession, ChatSessionMessagesPayload, CreateUziReportRequest, CreateUziReportResponse, LoginRequest, LoginResponse, PersistentSession, PersistentSessionMessagesPayload, RawToolPreviewDetail, RunDetail, RunSummary, RunSummaryPage, RuntimeOverview, ScheduleConfig, SkillInfo, SkillListItem, UziReportDetail, UziReportListResponse, UziReportStatus, UziStatus } from '../types.ts'
+import type { AccountOverview, AppSettings, ChatAttachment, ChatRequest, ChatResponse, ChatSession, ChatSessionMessagesPayload, CreateUziReportRequest, CreateUziReportResponse, LoginRequest, LoginResponse, PersistentSession, PersistentSessionMessagesPayload, RawToolPreviewDetail, RunDetail, RunSummary, RunSummaryPage, RuntimeOverview, ScheduleConfig, SkillInfo, SkillListItem, UziReportDetail, UziReportListResponse, UziReportStatus, UziSourceStatus, UziStatus } from '../types.ts'
 import {
   LOGIN_NOTICE_STORAGE_KEY,
   LOGIN_REDIRECT_STORAGE_KEY,
@@ -468,6 +468,15 @@ export const api = {
   // ── UZI 深度报告（文档 §10）────────────────────────
   getUziStatus() {
     return request<UziStatus>(`${API_PREFIX}/uzi/status`)
+  },
+  getUziSourceStatus() {
+    return request<UziSourceStatus>(`${API_PREFIX}/uzi/source/status`)
+  },
+  updateUziSource() {
+    return request<UziSourceStatus>(`${API_PREFIX}/uzi/source/update`, {
+      method: 'POST',
+      timeoutMs: 4 * 60 * 1000,
+    })
   },
   createUziReport(payload: CreateUziReportRequest) {
     return request<CreateUziReportResponse>(`${API_PREFIX}/uzi/reports`, {

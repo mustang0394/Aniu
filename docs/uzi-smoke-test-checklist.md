@@ -32,6 +32,15 @@
   `queued → stage1_running → llm_review → stage2_running → completed`，进度从 0 到 100。
 - [ ] SSE 事件不含模型隐藏推理内容（仅阶段、数据源、完成数量与错误摘要）。
 - [ ] 任务结束后 SSE 发送终态事件并关闭；断线重连先收到数据库快照再订阅增量。
+- [ ] Stage 2 日志显示基金风格识别最多查询 `UZI_QUANT_MAX_FUNDS` 只基金；模拟查询超时后记录“已跳过”并继续完成报告。
+
+## 2.1 上游更新
+
+- [ ] 无活动报告时，页面“更新上游”按钮可检查并更新到 GitHub 最新 commit；已是最新版时幂等返回。
+- [ ] 有 queued/running 报告时更新返回 `409`，不会改变该任务记录的 `uzi_commit`。
+- [ ] 更新成功后 `/api/aniu/uzi/status` 显示新短 commit，新建报告记录新版本。
+- [ ] 重启 `aniu-uzi-worker` 后仍使用 `/app/data/uzi_source` 中的更新版本。
+- [ ] 上游版本不兼容或下载失败时保留旧源码，新报告仍可使用旧版本生成。
 
 ## 3. 产物校验
 

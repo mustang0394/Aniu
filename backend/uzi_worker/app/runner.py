@@ -513,6 +513,15 @@ class JobRunner:
 
         progress = 85
         message = state.progress_message or "正在综合并渲染报告。"
+        quant_marker = _load_json(cache_dir / ".aniu-quant-running.json")
+        if quant_marker is not None:
+            progress = 86
+            max_funds = int(quant_marker.get("max_funds") or 0)
+            message = (
+                f"正在识别基金风格（最多 {max_funds} 只，超时会自动跳过）。"
+                if max_funds > 0
+                else "正在识别基金风格，超时会自动跳过。"
+            )
         if (cache_dir / "synthesis.json").is_file():
             progress = 88
             message = "综合研判完成，正在组装 HTML 报告。"

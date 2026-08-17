@@ -119,3 +119,19 @@ class UziCancelResponse(BaseModel):
     id: int
     status: UziReportStatus
     cancelled: bool = False
+
+
+class UziSourceStatusRead(BaseModel):
+    repository: str
+    current_commit: str
+    current_version: str
+    latest_commit: str | None = None
+    latest_version: str | None = None
+    update_available: bool = False
+    updated: bool = False
+    checked_at: str
+    can_update: bool = True
+    active_jobs: int = 0
+    reason: str | None = None
+    error: str | None = None
+    message: str | None = None

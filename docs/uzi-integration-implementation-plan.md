@@ -237,6 +237,7 @@ backend/uzi_worker/
 │   ├── main.py
 │   ├── models.py
 │   ├── runner.py
+│   ├── source_updater.py
 │   ├── state_store.py
 │   └── uzi_adapter.py
 ├── Dockerfile
@@ -316,7 +317,8 @@ Worker 配置：
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `UZI_WORKER_TOKEN` | 无 | 必须与主服务共享密钥一致 |
-| `UZI_SOURCE_ROOT` | `/opt/uzi` | 镜像内固定上游源码 |
+| `UZI_SOURCE_ROOT` | `/app/data/uzi_source` | 当前生效的持久上游源码；首次启动从镜像固定版本初始化 |
+| `UZI_BUNDLED_SOURCE_ROOT` | `/opt/uzi` | 镜像内固定、可用于初始化的上游源码 |
 | `UZI_REPORT_ROOT` | `/app/data/uzi_reports` | 共享报告根目录 |
 | `UZI_WORKER_PORT` | `9001` | 内部端口 |
 | `UZI_DEPTH` | `deep` | 固定深度 |
@@ -325,6 +327,8 @@ Worker 配置：
 | `UZI_PLAYWRIGHT_ENABLE` | `1` | 启用镜像内 Playwright 兜底 |
 | `UZI_STAGE2_TIMEOUT_SECONDS` | `600` | Stage 2 整体硬超时，超时终止子进程组 |
 | `UZI_RENDER_TIMEOUT_SECONDS` | `90` | 单张分享图片渲染超时，超时仅跳过该图片 |
+| `UZI_QUANT_MAX_FUNDS` | `12` | 量化风格识别最多查询的基金样本数 |
+| `UZI_QUANT_TIMEOUT_SECONDS` | `45` | 基金风格识别总超时；超时只跳过该可选标签并继续报告 |
 | `PYTHONUNBUFFERED` | `1` | 实时输出阶段日志 |
 
 敏感信息要求：
@@ -599,12 +603,25 @@ Worker 必须先验证：
 
 Worker 终止任务进程组：先发送 SIGTERM，等待最多 10 秒，再发送 SIGKILL。必须保证只终止该报告 ID 对应的子进程。
 
+### 11.6 上游版本与更新
+
+- `GET /internal/source/status`：返回当前 commit、是否可更新和活动任务数。
+- `POST /internal/source/update`：检查 GitHub 最新 commit，下载并校验归档后原子切换源码。
+- 公共 JWT 接口对应为 `GET /api/aniu/uzi/source/status` 和 `POST /api/aniu/uzi/source/update`。
+- 更新期间禁止创建新报告；存在 queued/running 报告时返回 `409`，运行中的任务绝不切换源码。
+
 ## 12. Worker 实现约束
 
 ### 12.1 UZI 源码和依赖
 
 - Worker 镜像构建时下载固定 Commit 归档并校验 SHA256。
+- 镜像固定版本仅作为可信初始化基线。运行时更新写入共享数据卷的
+  `/app/data/uzi_source`，因此容器重启后仍保留；镜像内 `/opt/uzi` 不被覆盖。
+- 页面更新只接受固定 GitHub 仓库的 commit 归档，限制下载/解压大小，拒绝路径穿越、
+  符号链接和缺少 `stage1/stage2` 入口的不兼容版本，并使用同文件系统原子替换。
 - 安装依赖必须来自 `requirements.lock`，不能直接依赖上游未锁定 requirements 作为最终生产输入。
+- 运行时更新不安装任何新依赖。若上游新增依赖，兼容性检查应失败或由下一版 Worker
+  镜像更新 `requirements.lock` 后再启用，禁止在宿主机或运行容器内执行 `pip install`。
 - Chromium 在镜像构建阶段安装，运行时不允许下载浏览器。
 - 镜像中保留 UZI LICENSE 和版本元数据。
 
@@ -1006,6 +1023,7 @@ HTML 加载：
 
 - 使用独立 Dockerfile。
 - 与主服务共享 `./data:/app/data`。
+- 上游可更新源码位于共享卷 `/app/data/uzi_source`；首次启动由镜像固定版本原子初始化。
 - 仅加入内部网络，不映射 Worker 端口到宿主机。
 - 配置健康检查。
 - 主服务通过 `UZI_WORKER_URL` 访问。

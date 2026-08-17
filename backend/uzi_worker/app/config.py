@@ -15,6 +15,8 @@ from pathlib import Path
 DEFAULT_WORKER_PORT = 9001
 DEFAULT_SOURCE_ROOT = "/opt/uzi"
 DEFAULT_REPORT_ROOT = "/app/data/uzi_reports"
+DEFAULT_STAGE2_TIMEOUT_SECONDS = 600
+DEFAULT_RENDER_TIMEOUT_SECONDS = 90
 
 # 固定的 UZI 深度模式（文档 §2.2：不提供深度级别选择，只支持 deep）。
 FIXED_DEPTH = "deep"
@@ -30,6 +32,8 @@ class WorkerConfig:
     report_root: Path
     port: int
     mock: bool
+    stage2_timeout_seconds: int
+    render_timeout_seconds: int
 
 
 def _env_or(name: str, default: str = "") -> str:
@@ -44,6 +48,15 @@ def _env_path(name: str, default: str) -> Path:
     return Path(raw)
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    raw = _env_or(name, str(default)) or str(default)
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 def get_worker_config() -> WorkerConfig:
     """每次调用都重新读取环境变量，便于测试与部署调整。"""
     token = _env_or("UZI_WORKER_TOKEN")
@@ -53,6 +66,12 @@ def get_worker_config() -> WorkerConfig:
         report_root=_env_path("UZI_REPORT_ROOT", DEFAULT_REPORT_ROOT),
         port=int(_env_or("UZI_WORKER_PORT", str(DEFAULT_WORKER_PORT)) or DEFAULT_WORKER_PORT),
         mock=_env_or("UZI_WORKER_MOCK", "0") in {"1", "true", "True", "yes"},
+        stage2_timeout_seconds=_env_positive_int(
+            "UZI_STAGE2_TIMEOUT_SECONDS", DEFAULT_STAGE2_TIMEOUT_SECONDS
+        ),
+        render_timeout_seconds=_env_positive_int(
+            "UZI_RENDER_TIMEOUT_SECONDS", DEFAULT_RENDER_TIMEOUT_SECONDS
+        ),
     )
 
 

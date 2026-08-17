@@ -26,11 +26,15 @@ Mock 模式（``UZI_WORKER_MOCK=1``）：不加载真实 UZI 源码，而是写�
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 import logging
 import os
+import signal
 import shutil
+import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -56,6 +60,9 @@ STAGE2_ARTIFACT_FILES = (
     "share-card.png",
     "war-report.png",
 )
+
+_ACTIVE_RENDER_LOCK = threading.Lock()
+_ACTIVE_RENDER_PROCESS: subprocess.Popen | None = None
 
 # 上游 stage2 生成的 HTML 文件名（standalone 独立版，已内联头像资源）。
 UPSTREAM_HTML_NAME = "full-report-standalone.html"
@@ -215,6 +222,7 @@ def run_stage2(
     normalized_ticker: str,
     source_root: Path,
     mock: bool,
+    render_timeout_seconds: int = 90,
 ) -> StageResult:
     """执行 Stage 2：综合与报告渲染。
 
@@ -253,8 +261,13 @@ def run_stage2(
         shutil.copy2(agent_src, cache_dir / "agent_analysis.json")
 
     cwd_before = os.getcwd()
+    restore_renderers = None
     try:
         os.chdir(scripts_dir)
+        restore_renderers = _install_bounded_renderers(
+            scripts_dir=scripts_dir,
+            timeout_seconds=max(1, int(render_timeout_seconds)),
+        )
         output = stage2_func(normalized_ticker)
     except UziStageError:
         raise
@@ -264,6 +277,8 @@ def run_stage2(
             f"Stage 2 执行失败：{_safe_exc_text(exc)}",
         ) from exc
     finally:
+        if restore_renderers is not None:
+            restore_renderers()
         os.chdir(cwd_before)
 
     return _collect_stage2_output(
@@ -272,6 +287,131 @@ def run_stage2(
         raw_output=output,
         ticker=normalized_ticker,
     )
+
+
+def _install_bounded_renderers(*, scripts_dir: Path, timeout_seconds: int):
+    """把上游两次 Playwright 截图改为有硬超时的隔离子进程。
+
+    上游 ``stage2`` 会捕获图片渲染异常，因此单张图片超时不会丢掉已经
+    生成的 HTML 和 synthesis。独立进程组也允许精确回收 Chromium 后代进程。
+    """
+    if not (scripts_dir / "render_share_card.py").is_file():
+        return lambda: None
+
+    share_module = importlib.import_module("render_share_card")
+    original_main = getattr(share_module, "main", None)
+    original_render = getattr(share_module, "render", None)
+    previous_war_module = sys.modules.pop("render_war_report", None)
+
+    def bounded_render(
+        ticker: str,
+        selector: str = "#share-card",
+        out_name: str = "share-card.png",
+        scale: int = 2,
+    ) -> Path:
+        return _run_bounded_renderer(
+            scripts_dir=scripts_dir,
+            ticker=ticker,
+            selector=selector,
+            out_name=out_name,
+            scale=scale,
+            timeout_seconds=timeout_seconds,
+        )
+
+    share_module.main = bounded_render
+    share_module.render = bounded_render
+
+    def restore() -> None:
+        share_module.main = original_main
+        share_module.render = original_render
+        sys.modules.pop("render_war_report", None)
+        if previous_war_module is not None:
+            sys.modules["render_war_report"] = previous_war_module
+
+    return restore
+
+
+def _run_bounded_renderer(
+    *,
+    scripts_dir: Path,
+    ticker: str,
+    selector: str,
+    out_name: str,
+    scale: int,
+    timeout_seconds: int,
+) -> Path:
+    code = (
+        "import sys; "
+        "from render_share_card import render; "
+        "render(sys.argv[1], selector=sys.argv[2], out_name=sys.argv[3], "
+        "scale=int(sys.argv[4]))"
+    )
+    proc = subprocess.Popen(  # noqa: S603 - 固定解释器与代码，参数不经 shell
+        [sys.executable, "-c", code, ticker, selector, out_name, str(scale)],
+        cwd=str(scripts_dir),
+        env=dict(os.environ),
+        start_new_session=(os.name == "posix"),
+    )
+    global _ACTIVE_RENDER_PROCESS
+    with _ACTIVE_RENDER_LOCK:
+        _ACTIVE_RENDER_PROCESS = proc
+    try:
+        exit_code = proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_renderer_process(proc)
+        raise TimeoutError(
+            f"{out_name} 渲染超过 {timeout_seconds} 秒，已跳过。"
+        ) from exc
+    finally:
+        with _ACTIVE_RENDER_LOCK:
+            if _ACTIVE_RENDER_PROCESS is proc:
+                _ACTIVE_RENDER_PROCESS = None
+
+    if exit_code != 0:
+        raise RuntimeError(f"{out_name} 渲染进程退出码为 {exit_code}。")
+    report_dirs = sorted(
+        child
+        for child in (scripts_dir / "reports").iterdir()
+        if child.is_dir() and child.name.startswith(f"{ticker}_")
+    )
+    if not report_dirs:
+        raise RuntimeError(f"{out_name} 渲染成功但报告目录不存在。")
+    output_path = report_dirs[-1] / out_name
+    if not output_path.is_file():
+        raise RuntimeError(f"{out_name} 渲染进程成功但产物不存在。")
+    return output_path
+
+
+def _terminate_renderer_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:  # pragma: no cover - Worker 正式环境为 Linux
+            proc.terminate()
+        proc.wait(timeout=3)
+        return
+    except (ProcessLookupError, PermissionError):
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:  # pragma: no cover
+            proc.kill()
+        proc.wait(timeout=2)
+    except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
+        pass
+
+
+def terminate_active_renderer() -> None:
+    """供 Worker 取消信号处理器回收当前 Playwright 进程组。"""
+    with _ACTIVE_RENDER_LOCK:
+        proc = _ACTIVE_RENDER_PROCESS
+    if proc is not None:
+        _terminate_renderer_process(proc)
 
 
 def _build_stage1_manifest(

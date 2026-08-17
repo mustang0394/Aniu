@@ -141,6 +141,8 @@ aniu-uzi-worker
 4. Worker 将最终产物复制到 `artifacts.tmp/`，计算大小和 SHA256。
 5. 全部校验通过后原子重命名为 `artifacts/`，并写入 `artifact-manifest.json`。
 6. AniU 从 `synthesis.json` 和元数据提取标准化摘要，写入数据库并将任务置为 `completed`。
+7. 分享图和战报图必须在独立进程组中限时渲染；单张图片超时只跳过该图片，不得阻断已生成的 HTML 报告。
+8. Stage 2 整体必须有 Worker 侧硬超时，超时后终止完整进程组并写入明确失败状态。
 
 ### 5.5 查看和引用
 
@@ -187,6 +189,11 @@ queued
 | 定性研究完成 | 72 |
 | 一致性与综合完成 | 82 |
 | Stage 2 开始 | 85 |
+| synthesis 已落盘 | 88 |
+| HTML 报告已组装 | 90 |
+| 独立 HTML 已生成 | 92 |
+| 分享图已生成 | 93 |
+| 战报图已生成 | 94 |
 | HTML 与图片完成 | 95 |
 | 数据落库并完成 | 100 |
 
@@ -316,6 +323,8 @@ Worker 配置：
 | `UZI_LITE` | `0` | 禁用 lite |
 | `UZI_NO_AUTO_OPEN` | `1` | 禁止自动打开浏览器 |
 | `UZI_PLAYWRIGHT_ENABLE` | `1` | 启用镜像内 Playwright 兜底 |
+| `UZI_STAGE2_TIMEOUT_SECONDS` | `600` | Stage 2 整体硬超时，超时终止子进程组 |
+| `UZI_RENDER_TIMEOUT_SECONDS` | `90` | 单张分享图片渲染超时，超时仅跳过该图片 |
 | `PYTHONUNBUFFERED` | `1` | 实时输出阶段日志 |
 
 敏感信息要求：

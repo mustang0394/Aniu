@@ -31,12 +31,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.config import get_stage_env
+from app.config import DEFAULT_STAGE2_TIMEOUT_SECONDS, get_stage_env
 from app.models import (
     ARTIFACTS_REL,
     AGENT_ANALYSIS_REL,
     STAGE1_MANIFEST_REL,
     ERROR_ARTIFACT_INVALID,
+    ERROR_JOB_TIMEOUT,
     ERROR_STAGE1_FAILED,
     ERROR_STAGE2_FAILED,
     WorkerJobState,
@@ -76,12 +77,16 @@ class JobRunner:
         report_root: Path,
         source_root: Path,
         mock: bool = False,
+        stage2_timeout_seconds: int = DEFAULT_STAGE2_TIMEOUT_SECONDS,
     ) -> None:
         self._store = store
         self._report_root = Path(report_root)
         self._source_root = Path(source_root)
         self._mock = mock
+        self._stage2_timeout_seconds = max(1, int(stage2_timeout_seconds))
         self._procs: dict[str, subprocess.Popen] = {}
+        self._proc_stages: dict[str, str] = {}
+        self._proc_started_at: dict[str, float] = {}
         self._mx_keys: dict[str, str] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -164,6 +169,8 @@ class JobRunner:
         state.worker_pid = proc.pid
         with self._lock:
             self._procs[report_id] = proc
+            self._proc_stages[report_id] = "1"
+            self._proc_started_at[report_id] = time.monotonic()
         self._store.upsert(state)
         logger.info("Stage 1 已启动: report_id=%s log=%s", report_id, log_path)
         return state
@@ -225,6 +232,8 @@ class JobRunner:
         state.worker_pid = proc.pid
         with self._lock:
             self._procs[report_id] = proc
+            self._proc_stages[report_id] = "2"
+            self._proc_started_at[report_id] = time.monotonic()
         self._store.upsert(state)
         logger.info("Stage 2 已启动: report_id=%s log=%s", report_id, log_path)
         return state
@@ -240,6 +249,8 @@ class JobRunner:
         self._terminate_process_group(report_id)
         with self._lock:
             self._procs.pop(report_id, None)
+            self._proc_stages.pop(report_id, None)
+            self._proc_started_at.pop(report_id, None)
         self._forget_mx_key(report_id)
         state.mark_cancelled(message=message)
         self._store.upsert(state)
@@ -382,10 +393,15 @@ class JobRunner:
             return
         exit_code = proc.poll()
         if exit_code is None:
+            self._sync_stage2_progress(report_id)
+            if self._stage2_timed_out(report_id):
+                self._fail_timed_out_stage2(report_id)
             return
 
         with self._lock:
             self._procs.pop(report_id, None)
+            self._proc_stages.pop(report_id, None)
+            self._proc_started_at.pop(report_id, None)
         self._forget_mx_key(report_id)
 
         state = self._store.get(report_id)
@@ -420,6 +436,118 @@ class JobRunner:
                 )
             self._store.upsert(state)
             self._cleanup_after_failure(report_dir)
+
+    def _stage2_timed_out(self, report_id: str) -> bool:
+        with self._lock:
+            stage = self._proc_stages.get(report_id)
+            started_at = self._proc_started_at.get(report_id)
+        return bool(
+            stage == "2"
+            and started_at is not None
+            and time.monotonic() - started_at >= self._stage2_timeout_seconds
+        )
+
+    def _fail_timed_out_stage2(self, report_id: str) -> None:
+        """终止失去响应的 Stage 2 进程组并持久化明确终态。"""
+        self._terminate_process_group(report_id)
+        with self._lock:
+            self._procs.pop(report_id, None)
+            self._proc_stages.pop(report_id, None)
+            self._proc_started_at.pop(report_id, None)
+        self._forget_mx_key(report_id)
+
+        state = self._store.get(report_id)
+        if state is None or state.is_terminal:
+            return
+        state.mark_failed(
+            error_code=ERROR_JOB_TIMEOUT,
+            error_message=(
+                "Stage 2 综合或渲染超时"
+                f"（超过 {self._stage2_timeout_seconds} 秒），相关进程已终止；"
+                "请查看 stage2.log 确认具体阻塞步骤。"
+            ),
+        )
+        self._store.upsert(state)
+        self._cleanup_after_failure(self._store.report_dir(report_id))
+        logger.error(
+            "Stage 2 超时并已终止: report_id=%s timeout_seconds=%s",
+            report_id,
+            self._stage2_timeout_seconds,
+        )
+
+    def _sync_stage2_progress(self, report_id: str) -> None:
+        """依据上游已落盘的中间产物同步真实渲染进度。"""
+        state = self._store.get(report_id)
+        if (
+            state is None
+            or state.status != WorkerStatus.RUNNING.value
+            or state.phase != "stage2_running"
+        ):
+            return
+
+        report_dir = self._store.report_dir(report_id)
+        manifest = _load_json(report_dir / STAGE1_MANIFEST_REL) or {}
+        ticker = str(manifest.get("ticker_normalized") or "").strip()
+        if not ticker:
+            return
+
+        scripts_dir = (
+            report_dir
+            / "work"
+            / "uzi"
+            / "skills"
+            / "deep-analysis"
+            / "scripts"
+        )
+        cache_dir = scripts_dir / ".cache" / ticker
+        reports_root = scripts_dir / "reports"
+        report_out_dir: Path | None = None
+        if reports_root.is_dir():
+            candidates = sorted(
+                child
+                for child in reports_root.iterdir()
+                if child.is_dir() and child.name.startswith(f"{ticker}_")
+            )
+            if candidates:
+                report_out_dir = candidates[-1]
+
+        progress = 85
+        message = state.progress_message or "正在综合并渲染报告。"
+        if (cache_dir / "synthesis.json").is_file():
+            progress = 88
+            message = "综合研判完成，正在组装 HTML 报告。"
+        if (
+            report_out_dir is not None
+            and (report_out_dir / "full-report.html").is_file()
+        ):
+            progress = 90
+            message = "HTML 报告已组装，正在生成独立报告。"
+        if report_out_dir is not None and (
+            report_out_dir / "full-report-standalone.html"
+        ).is_file():
+            progress = 92
+            message = "独立报告已生成，正在渲染分享图片。"
+        if (
+            report_out_dir is not None
+            and (report_out_dir / "share-card.png").is_file()
+        ):
+            progress = 93
+            message = "分享卡已生成，正在渲染战报图片。"
+        if (
+            report_out_dir is not None
+            and (report_out_dir / "war-report.png").is_file()
+        ):
+            progress = 94
+            message = "报告图片已生成，正在校验最终产物。"
+
+        if progress <= state.progress:
+            return
+        state.mark_running(
+            phase="stage2_running",
+            progress=progress,
+            message=message,
+        )
+        self._store.upsert(state)
 
     def _finalize_stage1(
         self, report_id: str, state: WorkerJobState, report_dir: Path

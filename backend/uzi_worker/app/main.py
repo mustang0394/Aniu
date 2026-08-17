@@ -139,6 +139,7 @@ async def app_lifespan(app: FastAPI):
         report_root=config.report_root,
         source_root=config.source_root,
         mock=config.mock,
+        stage2_timeout_seconds=config.stage2_timeout_seconds,
     )
     app.state.runner.start()
     try:

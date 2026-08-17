@@ -52,10 +52,22 @@ def main(argv: list[str] | None = None) -> int:
         UziStageError,
         run_stage1,
         run_stage2,
+        terminate_active_renderer,
     )
     from app.config import get_worker_config
 
     config = get_worker_config()
+
+    # Stage 2 会把 Playwright 截图放到独立进程组。Worker 被取消或整体超时
+    # 时先清理该进程组，避免 Chromium 残留。
+    if os.name == "posix":
+        import signal
+
+        def _handle_termination(signum, _frame):
+            terminate_active_renderer()
+            raise SystemExit(128 + signum)
+
+        signal.signal(signal.SIGTERM, _handle_termination)
     report_root = Path(args.report_root)
     store = StateStore(report_root, recover=False)
     report_dir = store.report_dir(args.report_id)
@@ -119,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
                 normalized_ticker=args.ticker,
                 source_root=Path(args.source_root),
                 mock=args.mock,
+                render_timeout_seconds=config.render_timeout_seconds,
             )
             if not result.success:
                 raise UziStageError(

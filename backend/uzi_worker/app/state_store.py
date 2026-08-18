@@ -44,14 +44,18 @@ class StateStore:
     # ── 读写 ──────────────────────────────────────────────
     def get(self, report_id: str) -> WorkerJobState | None:
         with self._lock:
-            cached = self._cache.get(report_id)
             path = self.state_path(report_id)
             if path.is_file():
                 state = self._read_file(path)
                 if state is not None:
                     self._cache[report_id] = state
                     return state
-            return cached
+            # 磁盘状态文件已不存在（报告被删除或目录被清理）：
+            # 必须丢弃内存缓存，否则会向调用方返回已删除任务的过期终态，
+            # 导致同一 report_id 重新提交时被直接判定为 failed/cancelled
+            # 而不会真正重新执行（issue: 删除失败报告后重建立即报同样错）。
+            self._cache.pop(report_id, None)
+            return None
 
     def upsert(self, state: WorkerJobState) -> WorkerJobState:
         with self._lock:

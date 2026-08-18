@@ -12,8 +12,14 @@
 # ── 阶段 1：获取固定 commit 的 UZI 源码 ─────────────────────
 FROM python:3.12-slim AS uzi-source
 
-ARG UZI_COMMIT=7bc779dd15ca4a741fcda20319a431f283232366
-ARG UZI_ARCHIVE_URL=https://github.com/wbh604/UZI-Skill/archive/${UZI_COMMIT}.tar.gz
+# 不再锁定固定 commit：每次构建都从 GitHub 拉取 main 分支最新提交。
+# 同时不再做 SHA256 校验（最新 commit 持续滚动，无法预置固定摘要）。
+# 代价：上游被篡改/误推坏代码会直接进入镜像；换取"始终最新"。
+# 如需回到可复现的固定版本构建，改回 ARG UZI_COMMIT=<sha> 并恢复
+# uzi-source.lock 的 sha256 校验逻辑即可。
+ARG UZI_REPO=wbh604/UZI-Skill
+ARG UZI_LATEST_API=https://api.github.com/repos/${UZI_REPO}/commits?per_page=1
+ARG UZI_ARCHIVE_URL=https://github.com/${UZI_REPO}/archive
 
 WORKDIR /opt
 
@@ -24,25 +30,17 @@ RUN apt-get update \
 
 COPY uzi-source.lock /opt/uzi-source.lock
 
-# 下载固定 commit 归档并校验 SHA256（文档 §12.1）。
-# 当 uzi-source.lock 中 sha256 为空时：打印实际计算值供补全，
-# 仅在构建参数 UZI_ALLOW_MISSING_SHA256=1 时放行（联调用），否则构建失败。
-ARG UZI_ALLOW_MISSING_SHA256=0
+# 动态拉取上游最新 commit 并下载归档（不校验 SHA256）。
+# 把实际 commit 与归档 sha256 写回 /opt/uzi-source.lock，供运行时
+# ensure_initialized 写入 .aniu-uzi-source.json，使 Worker 显示的
+# 版本与镜像内源码保持一致。
 RUN set -eux; \
-    curl -fsSL "${UZI_ARCHIVE_URL}" -o /opt/uzi.tar.gz; \
-    ACTUAL_SHA256="$(sha256sum /opt/uzi.tar.gz | awk '{print $1}')"; \
-    SHA256_EXPECTED="$(python3 -c 'import json,sys; print(json.load(open("/opt/uzi-source.lock")).get("sha256") or "")')"; \
-    if [ -n "${SHA256_EXPECTED}" ]; then \
-        echo "${SHA256_EXPECTED}  /opt/uzi.tar.gz" | sha256sum -c -; \
-    else \
-        echo "警告: uzi-source.lock 未配置 sha256。实际归档 sha256=${ACTUAL_SHA256}"; \
-        echo "请在 uzi-source.lock 中补全该值后重新构建。"; \
-        if [ "${UZI_ALLOW_MISSING_SHA256}" != "1" ]; then \
-            echo "错误: sha256 缺失且未设置 UZI_ALLOW_MISSING_SHA256=1，构建中止。"; \
-            exit 1; \
-        fi; \
-        echo "UZI_ALLOW_MISSING_SHA256=1，跳过校验继续（仅限联调，禁止用于发布）。"; \
-    fi; \
+    UZI_COMMIT="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Aniu-UZI-Worker' "${UZI_LATEST_API}" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["sha"])')"; \
+    echo "UZI latest commit: ${UZI_COMMIT}"; \
+    curl -fsSL "${UZI_ARCHIVE_URL}/${UZI_COMMIT}.tar.gz" -o /opt/uzi.tar.gz; \
+    ARCHIVE_SHA256="$(sha256sum /opt/uzi.tar.gz | awk '{print $1}')"; \
+    export UZI_COMMIT ARCHIVE_SHA256 UZI_ARCHIVE_URL; \
+    python3 -c 'import json,os; p="/opt/uzi-source.lock"; d=json.load(open(p)); c=os.environ["UZI_COMMIT"]; s=os.environ["ARCHIVE_SHA256"]; u=os.environ["UZI_ARCHIVE_URL"]; d["commit"]=c; d["sha256"]=s; d["archive_url"]=u+"/"+c+".tar.gz"; json.dump(d, open(p,"w"), ensure_ascii=False, indent=2)'; \
     mkdir -p /opt/uzi; \
     tar -xzf /opt/uzi.tar.gz --strip-components=1 -C /opt/uzi; \
     rm -f /opt/uzi.tar.gz

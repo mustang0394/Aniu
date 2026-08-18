@@ -1,6 +1,7 @@
 {
   "repository": "https://github.com/wbh604/UZI-Skill",
-  "commit": "7bc779dd15ca4a741fcda20319a431f283232366",
-  "archive_url": "https://github.com/wbh604/UZI-Skill/archive/7bc779dd15ca4a741fcda20319a431f283232366.tar.gz",
-  "sha256": "4bfcf70958d90f7eb680cd9cb9ea52c862b2b5a2a38d385d4a010247be263e54"
+  "commit": "",
+  "archive_url": "",
+  "sha256": "",
+  "_note": "构建期由 Dockerfile 动态拉取上游 main 最新 commit 并写回本文件；本仓库不再锁定固定版本。"
 }

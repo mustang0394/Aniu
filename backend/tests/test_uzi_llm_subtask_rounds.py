@@ -245,6 +245,12 @@ def test_truncated_output_gets_concise_forced_json_retry() -> None:
 
 
 def test_uzi_does_not_retry_non_transient_400() -> None:
+    """4xx 错误也走重试预算（与 5xx 一致）。
+
+    历史：400 曾被判定为不可重试并立即放弃。现已统一为所有错误均
+    走重试，以满足 LLM 网关偶发误返 4xx 的场景。预算耗尽后抛
+    UZI_LLM_REVIEW_FAILED。
+    """
     attempts = 0
 
     class _FakeLLM:
@@ -257,6 +263,7 @@ def test_uzi_does_not_retry_non_transient_400() -> None:
             )
 
     orchestrator = UziLlmOrchestrator(llm_service=_FakeLLM())
+    orchestrator._retry_delay_seconds = lambda attempt: 0
     with pytest.raises(UziReviewError) as exc_info:
         orchestrator._call_llm(
             app_settings=_settings(llm_max_retries=3),
@@ -265,8 +272,8 @@ def test_uzi_does_not_retry_non_transient_400() -> None:
         )
 
     assert exc_info.value.error_code == ERROR_LLM_REVIEW_FAILED
-    assert "不可重试的 400" in exc_info.value.message
-    assert attempts == 1
+    assert "已重试 3 次" in exc_info.value.message
+    assert attempts == 4
 
 
 def test_reasoning_400_does_not_trigger_stream_options_fallback(monkeypatch) -> None:

@@ -96,7 +96,9 @@ RUN python -m pip install --upgrade pip \
 
 # Worker 应用代码。
 COPY app ./app
-COPY uzi-source.lock ./uzi-source.lock
+# 复制阶段 1 动态写回实际 commit 的 lock（不要 COPY 仓库原始空 lock，
+# 否则 current_commit fallback 会返回 unknown）。
+COPY --from=uzi-source /opt/uzi-source.lock ./uzi-source.lock
 
 # 固定上游源码（含 LICENSE）。
 COPY --from=uzi-source /opt/uzi /opt/uzi

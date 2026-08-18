@@ -30,7 +30,6 @@ from app.core.config import get_settings
 from app.db.models import AppSettings
 from app.services.llm_service import (
     LLMService,
-    LLMUpstreamError,
     _to_text_content,
     normalize_max_retries,
 )
@@ -1136,16 +1135,9 @@ class UziLlmOrchestrator:
                 raise
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                if (
-                    isinstance(exc, LLMUpstreamError)
-                    and exc.status_code is not None
-                    and 400 <= exc.status_code < 500
-                    and exc.status_code not in {408, 409, 429}
-                ):
-                    raise UziReviewError(
-                        ERROR_LLM_REVIEW_FAILED,
-                        f"大模型调用失败（不可重试的 {exc.status_code}）：{exc}",
-                    ) from exc
+                # 注：所有 HTTP 错误（含 4xx）均走重试预算。401/403/400 等
+                # 重试同样 payload 通常仍会失败，但放行以满足网关偶发误返 4xx
+                # 的场景；用户可通过 llm_max_retries 控制预算。
                 if attempt >= budget:
                     raise UziReviewError(
                         ERROR_LLM_REVIEW_FAILED,

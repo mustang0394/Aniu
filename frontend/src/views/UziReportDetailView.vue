@@ -146,7 +146,7 @@
         <div v-if="htmlPreviewLoaded" class="overflow-hidden rounded-[12px] border border-separator bg-white">
           <iframe
             :src="htmlPreviewUrl ?? undefined"
-            sandbox="allow-scripts allow-downloads"
+            sandbox="allow-scripts allow-downloads allow-same-origin"
             class="block h-[70vh] min-h-[420px] w-full border-0 bg-white"
             title="UZI 报告预览"
             loading="lazy"

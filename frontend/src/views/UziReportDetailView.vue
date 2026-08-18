@@ -311,8 +311,14 @@ async function handleOpenInNewTab(): Promise<void> {
       const blob = await api.fetchUziReportArtifactBlob(detail.value.id, 'html')
       url = URL.createObjectURL(blob)
     }
-    const win = window.open(url, '_blank', 'noopener')
-    if (win === null) {
+    // 注意：不能传 'noopener' 特性——它会让 window.open 始终返回 null，
+    // 导致下面无法区分“成功打开新标签页”和“弹窗被浏览器拦截”，
+    // 从而把成功打开误判为被拦截，回退时把当前标签页也带走了。
+    // 这里改用手动清除 opener 引用，达到与 noopener 相同的窗口隔离效果。
+    const win = window.open(url, '_blank')
+    if (win !== null) {
+      win.opener = null
+    } else {
       // 被浏览器拦截时回退到当前标签页跳转。
       window.location.href = url
     }

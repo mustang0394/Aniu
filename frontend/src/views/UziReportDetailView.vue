@@ -131,6 +131,15 @@
         <template #actions>
           <div class="flex flex-wrap items-center gap-2">
             <UiButton
+              v-if="hasHtmlArtifact && isTerminal"
+              variant="ghost"
+              size="sm"
+              :disabled="openingTab || htmlPreviewLoading"
+              @click="handleOpenInNewTab"
+            >
+              {{ openingTab ? '打开中…' : '新标签页预览' }}
+            </UiButton>
+            <UiButton
               v-for="artifact in detail.artifacts"
               :key="artifact.key"
               variant="ghost"
@@ -204,6 +213,7 @@ const htmlPreviewUrl = ref<string | null>(null)
 const htmlPreviewLoading = ref(false)
 const htmlPreviewError = ref('')
 const htmlPreviewLoaded = ref(false)
+const openingTab = ref(false)
 
 const isTerminal = computed(() => {
   const status = detail.value?.status
@@ -288,6 +298,28 @@ async function loadHtmlPreview(reportId: number): Promise<void> {
     htmlPreviewError.value = (err as Error).message || '报告预览加载失败。'
   } finally {
     htmlPreviewLoading.value = false
+  }
+}
+
+async function handleOpenInNewTab(): Promise<void> {
+  if (!detail.value || detail.value.status !== 'completed') return
+  openingTab.value = true
+  try {
+    // 复用已加载的 blob URL；未加载时按需拉取一份独立的（不干扰内嵌预览状态）。
+    let url = htmlBlobUrl
+    if (url === null) {
+      const blob = await api.fetchUziReportArtifactBlob(detail.value.id, 'html')
+      url = URL.createObjectURL(blob)
+    }
+    const win = window.open(url, '_blank', 'noopener')
+    if (win === null) {
+      // 被浏览器拦截时回退到当前标签页跳转。
+      window.location.href = url
+    }
+  } catch (err) {
+    loadError.value = (err as Error).message || '打开报告预览失败。'
+  } finally {
+    openingTab.value = false
   }
 }
 

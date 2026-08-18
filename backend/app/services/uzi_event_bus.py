@@ -121,6 +121,15 @@ class UziEventBus:
         with channel.lock:
             return channel.finished_at is not None
 
+    def reset(self, report_id: int) -> None:
+        """任务删除/重建时丢弃旧通道，防止同 id 新任务回放出旧终态事件。
+
+        SQLite 行号复用可能让新任务拿到刚删除任务的同 id；旧通道的回放
+        （最多 120s 内的 cancelled/failed 历史事件）会污染新任务的 SSE 流。
+        """
+        with self._global_lock:
+            self._channels.pop(report_id, None)
+
     def _maybe_expire_finished(self) -> None:
         now = time.time()
         with self._global_lock:

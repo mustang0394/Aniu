@@ -149,6 +149,9 @@ class UziReportService:
         self._create_lock = threading.Lock()
         self._source_update_lock = threading.Lock()
         self._source_update_in_progress = False
+        # 当前执行代际（任务行 created_at）：单线程执行器专用，用于识别
+        # 同 report_id 被删除重建（SQLite 行号复用）后的新旧任务归属。
+        self._run_token = None
 
     def _check_create_rate_limit(self, client_ip: str) -> None:
         """同一登录来源创建新任务的最小间隔；复用任务不在此限（§10.2）。"""
@@ -197,6 +200,7 @@ class UziReportService:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._run_token = None
         # 清空残留队列（含哨兵），避免跨测试/重启泄漏旧任务。
         while True:
             try:
@@ -355,6 +359,13 @@ class UziReportService:
         job.report_rel_dir = str(job.id)
         db.commit()
         db.refresh(job)
+
+        # 陈旧状态清理：SQLite 行号表（无 AUTOINCREMENT）会复用刚删除任务的行号，
+        # 新任务可能拿到与已删除任务相同的 id。必须清除该 id 残留的取消闩锁与
+        # 事件通道，否则新任务一启动就被旧取消信号误判（立即变成 cancelled）。
+        with self._cancel_lock:
+            self._cancel_events.pop(job.id, None)
+        uzi_event_bus.reset(job.id)
 
         self.enqueue(job.id)
         return job, False
@@ -576,6 +587,11 @@ class UziReportService:
                 raise RuntimeError("报告文件删除失败，请稍后重试。") from exc
         db.delete(job)
         db.commit()
+        # 任务已删除：该 id 的取消闩锁与事件通道不再有任何意义，必须清理。
+        # 否则 id 被 SQLite 复用给新任务后，新任务会继承旧任务的取消信号。
+        with self._cancel_lock:
+            self._cancel_events.pop(report_id, None)
+        uzi_event_bus.reset(report_id)
 
     def _resolve_report_dir(self, report_rel_dir: str) -> Path | None:
         """路径解析：必须确认目标是 UZI_REPORT_ROOT 的后代（§16.1）。"""
@@ -667,6 +683,9 @@ class UziReportService:
             job.llm_reasoning_effort = app_settings.llm_reasoning_effort
             # 记录恢复起始状态：从对应阶段继续，而非无条件重跑 Stage 1（阻断项7）。
             resume_status = str(job.status or "queued").strip()
+            # 本次执行代际：任务行被删除重建（id 复用）时，旧代际必须立即
+            # 退出，不得把终态/进度写到新任务上。
+            self._run_token = job.created_at
             db.commit()
 
         deadline = time.monotonic() + float(get_settings().uzi_job_timeout_seconds)
@@ -686,11 +705,15 @@ class UziReportService:
                 self._run_stage2(report_id, deadline=deadline)
             elif resume_status == "stage2_running":
                 self._run_stage2(report_id, deadline=deadline)
-            self._finalize_completed(report_id)
+            self._finalize_completed(report_id, run_token=self._run_token)
         except _JobCancelled:
             with session_scope() as db:
                 job = db.get(UziReportJob, report_id)
-                if job is not None and job.status not in UZI_TERMINAL_STATUSES:
+                if (
+                    job is not None
+                    and job.status not in UZI_TERMINAL_STATUSES
+                    and self._incarnation_matches(job, self._run_token)
+                ):
                     self._mark_terminal(
                         db, job,
                         status="cancelled",
@@ -703,7 +726,11 @@ class UziReportService:
             self._cancel_worker_best_effort(report_id)
             with session_scope() as db:
                 job = db.get(UziReportJob, report_id)
-                if job is not None and job.status not in UZI_TERMINAL_STATUSES:
+                if (
+                    job is not None
+                    and job.status not in UZI_TERMINAL_STATUSES
+                    and self._incarnation_matches(job, self._run_token)
+                ):
                     self._mark_terminal(
                         db, job,
                         status="failed",
@@ -716,18 +743,27 @@ class UziReportService:
             self._cancel_worker_best_effort(report_id)
             with session_scope() as db:
                 job = db.get(UziReportJob, report_id)
-                if job is not None and job.status not in UZI_TERMINAL_STATUSES:
+                if (
+                    job is not None
+                    and job.status not in UZI_TERMINAL_STATUSES
+                    and self._incarnation_matches(job, self._run_token)
+                ):
                     self._mark_terminal(
                         db, job,
                         status="failed",
                         error_code=ERROR_ORPHANED_JOB,
                         error_message=f"任务执行异常：{exc}",
                     )
+        finally:
+            self._run_token = None
 
     def _run_stage1(self, report_id: int, *, deadline: float) -> None:
         with session_scope() as db:
             job = db.get(UziReportJob, report_id)
             self._raise_if_cancelled(report_id)
+            if not self._incarnation_matches(job, self._run_token):
+                # 行被删除/重建（id 复用）：本代执行直接退出，不碰新任务。
+                raise _JobCancelled()
             self._update_progress(
                 db, job,
                 status="stage1_running", phase="stage1_running", progress=5,
@@ -856,6 +892,12 @@ class UziReportService:
         poll_seconds = max(0.5, float(get_settings().uzi_poll_interval_seconds))
         while True:
             self._raise_if_cancelled(report_id)
+            # 代际自检：任务行被删除/重建（id 复用）时本代轮询立即退出，
+            # 防止僵尸轮询占用单线程执行器，或超时后把新任务误标为失败。
+            with session_scope() as db:
+                current = db.get(UziReportJob, report_id)
+                if not self._incarnation_matches(current, self._run_token):
+                    raise _JobCancelled()
             if time.monotonic() > deadline:
                 raise _JobFailed(
                     ERROR_JOB_TIMEOUT,
@@ -887,7 +929,11 @@ class UziReportService:
         message = str(worker_state.get("progress_message") or "").strip() or None
         with session_scope() as db:
             job = db.get(UziReportJob, report_id)
-            if job is None or job.status in UZI_TERMINAL_STATUSES:
+            if (
+                job is None
+                or job.status in UZI_TERMINAL_STATUSES
+                or not self._incarnation_matches(job, self._run_token)
+            ):
                 return
             if phase in _WORKER_STAGE1_PHASES and job.status == "stage1_running":
                 self._update_progress(
@@ -929,6 +975,8 @@ class UziReportService:
         with session_scope() as db:
             job = db.get(UziReportJob, report_id)
             self._raise_if_cancelled(report_id)
+            if not self._incarnation_matches(job, self._run_token):
+                raise _JobCancelled()
             self._update_progress(
                 db, job,
                 status="llm_review", phase="llm_review", progress=50,
@@ -951,7 +999,11 @@ class UziReportService:
         def _progress(progress: int, message: str) -> None:
             with session_scope() as db:
                 fresh = db.get(UziReportJob, report_id)
-                if fresh is None or fresh.status in UZI_TERMINAL_STATUSES:
+                if (
+                    fresh is None
+                    or fresh.status in UZI_TERMINAL_STATUSES
+                    or not self._incarnation_matches(fresh, self._run_token)
+                ):
                     return
                 self._update_progress(
                     db, fresh,
@@ -1062,7 +1114,7 @@ class UziReportService:
         )
         with session_scope() as db:
             job = db.get(UziReportJob, report_id)
-            if job is not None:
+            if job is not None and self._incarnation_matches(job, self._run_token):
                 self._update_progress(
                     db, job,
                     status="llm_review", phase="llm_review", progress=50,
@@ -1073,6 +1125,8 @@ class UziReportService:
         with session_scope() as db:
             job = db.get(UziReportJob, report_id)
             self._raise_if_cancelled(report_id)
+            if not self._incarnation_matches(job, self._run_token):
+                raise _JobCancelled()
             self._update_progress(
                 db, job,
                 status="stage2_running", phase="stage2_running", progress=85,
@@ -1167,8 +1221,14 @@ class UziReportService:
             raise _JobFailed(ERROR_STAGE2_FAILED, "Stage 2 提交失败（Worker 不可达）。")
         self._poll_worker(report_id, until={"succeeded", "failed", "cancelled"}, deadline=deadline)
 
-    def _finalize_completed(self, report_id: int) -> None:
-        """从 synthesis.json 与 manifest 提取标准化摘要，落库并 completed。"""
+    def _finalize_completed(
+        self, report_id: int, *, run_token: datetime | None = None
+    ) -> None:
+        """从 synthesis.json 与 manifest 提取标准化摘要，落库并 completed。
+
+        ``run_token``：执行代际（created_at）；缺省为 None 时不做代际校验
+        （供启动对账等非执行器路径使用，此时行由调用方持有）。
+        """
         report_dir = self._resolve_report_dir(str(report_id))
         if report_dir is None:
             raise _JobFailed(ERROR_ORPHANED_JOB, "报告目录缺失。")
@@ -1183,7 +1243,11 @@ class UziReportService:
         summary = self._build_summary(synthesis, manifest, report_dir=report_dir)
         with session_scope() as db:
             job = db.get(UziReportJob, report_id)
-            if job is None or job.status in UZI_TERMINAL_STATUSES:
+            if (
+                job is None
+                or not self._incarnation_matches(job, run_token)
+                or job.status in UZI_TERMINAL_STATUSES
+            ):
                 return
             job.ticker_normalized = (
                 str(synthesis.get("ticker") or job.ticker_normalized or "").strip()
@@ -1445,6 +1509,17 @@ class UziReportService:
             {"progress": job.progress, "message": error_message},
         )
 
+    @staticmethod
+    def _incarnation_matches(job: UziReportJob | None, run_token: datetime | None) -> bool:
+        """任务行是否仍属于给定执行代际（run_token 为 None 时不设防）。
+
+        SQLite 行号复用（删除最大行后新任务拿到同 id）时，旧代际的轮询/
+        进度回调必须能识别“行已被换掉”并立即退出，防止把终态写到新任务上。
+        """
+        if run_token is None:
+            return True
+        return job is not None and job.created_at == run_token
+
     def _raise_if_cancelled(self, report_id: int) -> None:
         with self._cancel_lock:
             event = self._cancel_events.get(report_id)
@@ -1566,7 +1641,7 @@ class UziReportService:
     def _resume_from_artifacts(self, db, job: UziReportJob) -> None:
         """本地已有完整产物：从清单恢复为 completed。"""
         try:
-            self._finalize_completed(job.id)
+            self._finalize_completed(job.id, run_token=job.created_at)
         except _JobFailed as exc:
             self._mark_terminal(
                 db, job,

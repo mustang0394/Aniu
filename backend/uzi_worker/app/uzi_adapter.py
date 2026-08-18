@@ -129,6 +129,142 @@ def _is_dict(data: Any) -> bool:
     return isinstance(data, dict)
 
 
+# ── Stage 1 数据缺失防御（上游 None 比较崩溃补丁）──────────────
+# 上游 commit b004d7a（本项目核对的最新版）在“数据缺失”时会让 Stage 1
+# 整体崩溃，错误形如：
+#   TypeError: '>' not supported between instances of 'NoneType' and 'int'
+# 两个根因（均已用上游源码复现）：
+#   1. lib/fin_models.compute_dcf 在 FCF/营收/净利率均缺失时返回
+#      {"intrinsic_per_share": None, "safety_margin_pct": None, ...}，
+#      而 lib/research_workflow.build_initiating_coverage 直接执行
+#      dcf_result.get("intrinsic_per_share", 0) > 0 —— 键存在但值为 None 时
+#      .get 不返回默认值，None > 0 抛 TypeError（Task 1.5 崩溃点）。
+#   2. lib/stock_features.extract_features 在护城河数据缺失时把 moat_total
+#      置为 None，而 research_workflow.run_idea_screen 与 investor_criteria
+#      规则层直接 f.get("moat_total", 0) >= 24 比较，同样崩溃。
+# 修复策略：不改上游源码，只在运行时对纯函数做安全包装：
+#   - compute_dcf：数据不足结果中移除 None 键 → .get(key, 0) 生效，
+#     verdict（"⛔ 数据不足 · 无法 DCF"）语义不变，Stage 2 渲染器按键缺失
+#     显示“数据缺失”；
+#   - extract_features：moat_total 为 None 时置 0 —— 规则层 0 >= 24 判负
+#     而非崩溃；moat_known 仍为 False，“无数据”语义不受影响；
+#   - lib.playwright_fallback.fetch_url：可选超时提升 —— 设了
+#     UZI_PLAYWRIGHT_TIMEOUT（秒，5-300）时把上游硬编码 15s 的调用提升为
+#     该值（stats.gov.cn 等慢站点 15s 经常超时导致兜底失败）；未设置则
+#     行为与上游完全一致。
+
+
+def _install_stage1_safety_patches() -> list[Any]:
+    """安装 Stage 1 数据缺失防御补丁，返回恢复函数列表。
+
+    必须在 ``_load_run_real_test`` 之后、``stage1_func`` 调用之前安装；
+    Stage 1 结束后调用恢复函数（逆序）还原上游模块原貌。
+    使用 `sys.modules` 遍历而非只 patch 固定模块，覆盖模块级
+    ``from lib.xxx import ...`` 的既有绑定（run_real_test、
+    lib.pipeline.score_fns 等）与未来新增的 import 点。
+    """
+    import importlib
+    from typing import Callable
+
+    def _load_module(name: str) -> Any | None:
+        """加载上游模块；伪上游/协议测试无 lib 包时返回 None。"""
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError:
+            return None
+
+    fin_models = _load_module("lib.fin_models")
+    stock_features = _load_module("lib.stock_features")
+    if fin_models is None and stock_features is None:
+        return []
+
+    restored: list[Callable[[], None]] = []
+
+    def _patch_module_attr(
+        module: Any, name: str, original: Any, wrapper: Any
+    ) -> None:
+        setattr(module, name, wrapper)
+        restored.append(
+            lambda m=module, n=name, o=original: setattr(m, n, o)
+        )
+
+    if fin_models is not None:
+        original_dcf = getattr(fin_models, "compute_dcf", None)
+        if callable(original_dcf):
+            def safe_compute_dcf(
+                features: dict, assumptions: dict | None = None
+            ) -> dict:
+                result = original_dcf(features, assumptions)
+                if isinstance(result, dict):
+                    for key in ("intrinsic_per_share", "safety_margin_pct"):
+                        if result.get(key) is None:
+                            result = {k: v for k, v in result.items() if k != key}
+                return result
+
+            _patch_module_attr(fin_models, "compute_dcf", original_dcf, safe_compute_dcf)
+            for _mod_name, _mod in list(sys.modules.items()):
+                if getattr(_mod, "compute_dcf", None) is original_dcf:
+                    _patch_module_attr(_mod, "compute_dcf", original_dcf, safe_compute_dcf)
+
+    if stock_features is not None:
+        original_extract = getattr(stock_features, "extract_features", None)
+        if callable(original_extract):
+            def safe_extract_features(raw: dict, dims: dict) -> dict:
+                features = original_extract(raw, dims)
+                if isinstance(features, dict) and features.get("moat_total") is None:
+                    features = dict(features)
+                    features["moat_total"] = 0
+                return features
+
+            _patch_module_attr(
+                stock_features, "extract_features", original_extract, safe_extract_features
+            )
+            for _mod_name, _mod in list(sys.modules.items()):
+                if getattr(_mod, "extract_features", None) is original_extract:
+                    _patch_module_attr(
+                        _mod, "extract_features", original_extract, safe_extract_features
+                    )
+
+    # ── Playwright 兜底超时：UZI_PLAYWRIGHT_TIMEOUT 覆盖上游硬编码 15s ──
+    # 上游 lib/playwright_fallback.py 有 10 处调用硬编码 timeout=15
+    # （3_macro/4_peers/8_materials/15_events/17_sentiment/19_contests 等），
+    # stats.gov.cn 等慢站点经常 15s 超时导致兜底失败。这里包装 fetch_url：
+    # 设了 UZI_PLAYWRIGHT_TIMEOUT（秒，5-300）时，把调用方硬编码的 15s 提升为
+    # 该值；未设置则行为与上游完全一致。
+    playwright_fallback = _load_module("lib.playwright_fallback")
+    if playwright_fallback is not None:
+        original_fetch_url = getattr(playwright_fallback, "fetch_url", None)
+        if callable(original_fetch_url):
+            def _playwright_timeout_override() -> int | None:
+                raw = os.environ.get("UZI_PLAYWRIGHT_TIMEOUT", "").strip()
+                if not raw:
+                    return None
+                try:
+                    return max(5, min(int(raw), 300))
+                except ValueError:
+                    return None
+
+            def safe_fetch_url(
+                url: str, wait_for: str | None = None, timeout: int = 15
+            ) -> str | None:
+                if timeout == 15:
+                    override = _playwright_timeout_override()
+                    if override is not None:
+                        timeout = override
+                return original_fetch_url(url, wait_for=wait_for, timeout=timeout)
+
+            _patch_module_attr(
+                playwright_fallback, "fetch_url", original_fetch_url, safe_fetch_url
+            )
+            for _mod_name, _mod in list(sys.modules.items()):
+                if getattr(_mod, "fetch_url", None) is original_fetch_url:
+                    _patch_module_attr(
+                        _mod, "fetch_url", original_fetch_url, safe_fetch_url
+                    )
+
+    return restored
+
+
 @dataclass
 class StageResult:
     success: bool
@@ -173,7 +309,11 @@ def run_stage1(
     # 切换 cwd 到 scripts 目录，确保 .cache / reports 落在任务源码副本内（§12.3）。
     cwd_before = os.getcwd()
     env_patch(mx_api_key=mx_api_key)
+    safety_restores: list[Any] = []
     try:
+        # 数据缺失防御：上游在 DCF/护城河数据缺失时的 None 比较会抛
+        # TypeError 让整个 Stage 1 失败；在调用 stage1 前安装安全包装。
+        safety_restores = _install_stage1_safety_patches()
         os.chdir(scripts_dir)
         output = stage1_func(ticker)
     except UziStageError:
@@ -184,6 +324,11 @@ def run_stage1(
             f"Stage 1 执行失败：{_safe_exc_text(exc)}",
         ) from exc
     finally:
+        for _restore in reversed(safety_restores):
+            try:
+                _restore()
+            except Exception:  # noqa: BLE001 - 恢复失败只记录，不影响结果
+                logger.warning("恢复 UZI stage1 安全补丁失败", exc_info=True)
         os.chdir(cwd_before)
         unregister_mx_secret(mx_api_key)
 

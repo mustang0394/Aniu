@@ -27,8 +27,8 @@ def create_test_client(monkeypatch, tmp_path) -> TestClient:
     database_module._engine = None
     database_module._session_local = None
     rate_limit_module._limiter.reset()
-    aniu_service._account_overview_cache = None
-    aniu_service._account_overview_cache_expires_at = None
+    aniu_service._account_overview_cache = {}
+    aniu_service._account_overview_cache_expires_at = {}
     app = create_app()
     return TestClient(app)
 

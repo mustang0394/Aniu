@@ -4,7 +4,19 @@
       title="定时设置"
       kicker="Schedules"
       description="配置分析与交易时段的自动任务"
-    />
+    >
+      <template v-if="store.hasMultipleAccounts">
+        <select
+          :value="store.selectedAccountId ?? ''"
+          class="input h-9 w-auto py-1"
+          @change="handleAccountSwitch"
+        >
+          <option v-for="acc in store.activeAccounts" :key="acc.id" :value="acc.id">
+            {{ acc.name }}（{{ acc.slug }}）
+          </option>
+        </select>
+      </template>
+    </UiPageHeader>
 
     <!-- Active schedules overview -->
     <UiPanel title="当前定时任务" kicker="Live Schedules">
@@ -192,9 +204,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { storeToRefs } from 'pinia'
 
-import { useAppStore } from '@/stores/legacy'
+import { useTradingAccountsStore } from '@/stores/tradingAccounts'
 import { useScheduleForm, timePointToInputValue } from '@/composables/useScheduleForm'
 import { formatWeekdayMinuteTime } from '@/utils/formatters'
 import UiBadge from '@/components/ui/UiBadge.vue'
@@ -204,8 +215,52 @@ import UiPageHeader from '@/components/ui/UiPageHeader.vue'
 import UiPanel from '@/components/ui/UiPanel.vue'
 import UiToggle from '@/components/ui/UiToggle.vue'
 
-const store = useAppStore()
-const { busy, schedules, errorMessage, activeScheduleCards, nextScheduledTask } = storeToRefs(store)
+const store = useTradingAccountsStore()
+const busy = ref(false)
+const schedules = ref<import('@/types').ScheduleConfig[]>([])
+const errorMessage = ref('')
+
+interface ScheduleCard {
+  id: number
+  name: string
+  category: string
+  cronExpression: string
+  displayTime: string
+  nextRunAt: string | null
+  lastRunAt: string | null
+}
+
+const activeScheduleCards = computed<ScheduleCard[]>(() => {
+  const items = schedules.value
+    .filter((item) => item.enabled)
+    .slice()
+    .map((item) => {
+      const parts = (item.cron_expression || '').trim().split(/\s+/)
+      const minute = Number(parts[0]) || 0
+      const hour = Number(parts[1]) || 0
+      const displayTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+      const displayName = item.name.replace(/#(\d+)$/, '$1号')
+      const category = item.run_type === 'trade' ? '交易任务' : '分析任务'
+      return {
+        id: item.id,
+        name: displayName,
+        category,
+        cronExpression: item.cron_expression,
+        displayTime,
+        nextRunAt: item.next_run_at,
+        lastRunAt: item.last_run_at,
+      }
+    })
+  items.sort((a, b) => a.displayTime.localeCompare(b.displayTime))
+  return items
+})
+
+const nextScheduledTask = computed<ScheduleCard | null>(() => {
+  const cards = activeScheduleCards.value.filter((card) => !!card.nextRunAt)
+  if (cards.length === 0) return null
+  const sorted = [...cards].sort((a, b) => (a.nextRunAt ?? '').localeCompare(b.nextRunAt ?? ''))
+  return sorted[0]
+})
 const {
   scheduleSettings,
   runCountOptions,
@@ -347,11 +402,41 @@ async function saveScheduleSettings() {
 
   try {
     const payload = buildPayload(schedules.value)
-    await store.saveSchedule(payload)
+    if (store.selectedAccountId === null) {
+      throw new Error('请先选择交易账户')
+    }
+    const saved = await store.saveSchedules(store.selectedAccountId, payload)
+    schedules.value = saved
+    syncFromSchedules(saved)
   } catch (error) {
     formError.value = (error as Error).message || '保存失败'
   }
 }
+
+async function loadSchedulesForAccount() {
+  if (store.selectedAccountId === null) {
+    schedules.value = []
+    syncFromSchedules([])
+    return
+  }
+  try {
+    const payload = await store.loadSchedules(store.selectedAccountId)
+    schedules.value = payload
+    syncFromSchedules(payload)
+  } catch (error) {
+    errorMessage.value = (error as Error).message || '加载失败'
+  }
+  formError.value = ''
+}
+
+watch(
+  () => store.selectedAccountId,
+  (newId, oldId) => {
+    if (newId !== null && newId !== oldId) {
+      void loadSchedulesForAccount()
+    }
+  },
+)
 
 watch(
   schedules,
@@ -359,12 +444,25 @@ watch(
     syncFromSchedules(value)
     formError.value = ''
   },
-  { immediate: true },
+  { immediate: false, deep: true },
 )
 
+function handleAccountSwitch(event: Event) {
+  const target = event.target as HTMLSelectElement
+  const accountIdValue = Number(target.value)
+  if (Number.isFinite(accountIdValue)) {
+    store.selectAccount(accountIdValue)
+  }
+}
+
 onMounted(async () => {
-  if (schedules.value.length === 0) {
-    await store.loadSchedule()
+  try {
+    await store.loadAccounts()
+  } catch (error) {
+    errorMessage.value = (error as Error).message
+  }
+  if (store.selectedAccountId !== null) {
+    await loadSchedulesForAccount()
   }
 })
 </script>

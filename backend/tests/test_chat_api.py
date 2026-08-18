@@ -35,8 +35,8 @@ def create_test_client(monkeypatch, tmp_path) -> TestClient:
     database_module._engine = None
     database_module._session_local = None
     rate_limit_module._limiter.reset()
-    aniu_service._account_overview_cache = None
-    aniu_service._account_overview_cache_expires_at = None
+    aniu_service._account_overview_cache = {}
+    aniu_service._account_overview_cache_expires_at = {}
     app = create_app()
     return TestClient(app)
 
@@ -493,7 +493,9 @@ def test_chat_system_prompt_always_appends_confirmation_rule(monkeypatch) -> Non
     monkeypatch.setattr(
         skill_registry,
         "build_prompt_supplement",
-        lambda *, run_type=None: "技能补充提示" if run_type == "chat" else "",
+        lambda *, run_type=None, disabled_skill_ids=None: (
+            "技能补充提示" if run_type == "chat" else ""
+        ),
     )
 
     chat_prompt = llm_service._augment_system_prompt(
@@ -1078,8 +1080,14 @@ def test_delete_run_endpoint_force_deletes_stuck_running_task(monkeypatch, tmp_p
 
         with session_scope() as db:
             assert db.get(StrategyRun, run_id) is None
+            from app.services.account_service import account_service
 
-    assert aniu_service._run_lock.locked() is False
+            accounts = account_service.list_accounts(db, include_archived=False)
+        assert all(
+            not aniu_service._get_account_run_lock(account.id).locked()
+            for account in accounts
+        )
+
     database_module._engine = None
     database_module._session_local = None
     get_settings.cache_clear()
@@ -1099,16 +1107,23 @@ def test_delete_run_endpoint_force_still_rejects_when_service_is_busy(monkeypatc
             db.flush()
             run_id = run.id
 
-        acquired = aniu_service._run_lock.acquire(blocking=False)
+        with session_scope() as db:
+            from app.services.account_service import account_service
+
+            default_account = account_service.list_accounts(
+                db, include_archived=False
+            )[0]
+        account_lock = aniu_service._get_account_run_lock(default_account.id)
+        acquired = account_lock.acquire(blocking=False)
         assert acquired is True
         try:
             headers = _auth_headers(client)
             response = client.delete(f"/api/aniu/runs/{run_id}?force=true", headers=headers)
         finally:
-            aniu_service._run_lock.release()
+            account_lock.release()
 
         assert response.status_code == 409
-        assert "当前仍有任务正在执行" in response.json()["detail"]
+        assert "当前账户仍有任务正在执行" in response.json()["detail"]
 
     database_module._engine = None
     database_module._session_local = None
@@ -1118,10 +1133,16 @@ def test_delete_run_endpoint_force_still_rejects_when_service_is_busy(monkeypatc
 def test_persistent_session_endpoint_returns_summary(monkeypatch, tmp_path) -> None:
     with create_test_client(monkeypatch, tmp_path) as client:
         with session_scope() as db:
+            from app.services.account_service import account_service
+
+            default_account = account_service.list_accounts(
+                db, include_archived=False
+            )[0]
             session = ChatSession(
                 title="自动化交易会话",
                 kind="automation",
-                slug="automation-default",
+                slug=f"automation-{default_account.id}",
+                trading_account_id=default_account.id,
                 archived_summary="## 当前策略\n- 继续观察",
                 summary_revision=3,
             )
@@ -1141,7 +1162,7 @@ def test_persistent_session_endpoint_returns_summary(monkeypatch, tmp_path) -> N
         assert response.status_code == 200
         payload = response.json()
         assert payload["title"] == "自动化交易会话"
-        assert payload["slug"] == "automation-default"
+        assert payload["slug"].startswith("automation-")
         assert payload["message_count"] == 1
         assert payload["summary_revision"] == 3
         assert "继续观察" in payload["archived_summary"]
@@ -1208,10 +1229,16 @@ def test_history_messages_no_longer_append_tool_summaries(monkeypatch, tmp_path)
 def test_persistent_session_messages_endpoint_returns_messages(monkeypatch, tmp_path) -> None:
     with create_test_client(monkeypatch, tmp_path) as client:
         with session_scope() as db:
+            from app.services.account_service import account_service
+
+            default_account = account_service.list_accounts(
+                db, include_archived=False
+            )[0]
             session = ChatSession(
                 title="自动化交易会话",
                 kind="automation",
-                slug="automation-default",
+                slug=f"automation-{default_account.id}",
+                trading_account_id=default_account.id,
             )
             db.add(session)
             db.flush()
@@ -1238,7 +1265,7 @@ def test_persistent_session_messages_endpoint_returns_messages(monkeypatch, tmp_
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["session"]["slug"] == "automation-default"
+        assert payload["session"]["slug"].startswith("automation-")
         assert [item["content"] for item in payload["messages"]] == ["first", "second"]
         assert payload["has_more"] is False
 

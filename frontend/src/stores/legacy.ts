@@ -35,6 +35,7 @@ const defaultSettings = (): SettingsPayload => ({
   app_display_name: 'Aniu',
   provider_name: 'openai-compatible',
   mx_api_key: '',
+  uzi_mx_api_key: '',
   llm_base_url: '',
   llm_api_key: '',
   llm_model: 'gpt-4o-mini',
@@ -223,6 +224,7 @@ export const useAppStore = defineStore('app', () => {
     settings.app_display_name = payload.app_display_name?.trim() || 'Aniu'
     settings.provider_name = payload.provider_name
     settings.mx_api_key = payload.mx_api_key ?? ''
+    settings.uzi_mx_api_key = payload.uzi_mx_api_key ?? ''
     settings.llm_base_url = payload.llm_base_url ?? ''
     settings.llm_api_key = payload.llm_api_key ?? ''
     settings.llm_model = payload.llm_model
@@ -360,6 +362,7 @@ export const useAppStore = defineStore('app', () => {
       const payload = await api.updateSettings({
         ...settings,
         mx_api_key: settings.mx_api_key || null,
+        uzi_mx_api_key: (settings.uzi_mx_api_key ?? '').trim() || null,
         llm_base_url: settings.llm_base_url || null,
         llm_api_key: settings.llm_api_key || null,
         llm_reasoning_effort: settings.llm_reasoning_effort?.trim() || null,

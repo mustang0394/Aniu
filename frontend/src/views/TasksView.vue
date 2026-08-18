@@ -1,6 +1,16 @@
 <template>
   <div class="space-y-5 sm:space-y-6">
     <UiPageHeader title="AI 分析" kicker="Analysis" description="手动执行分析/交易，并查看历史运行详情">
+      <select
+        v-if="store.hasMultipleAccounts"
+        :value="store.selectedAccountId ?? ''"
+        class="input h-9 w-auto py-1"
+        @change="handleAccountSwitch"
+      >
+        <option v-for="acc in store.activeAccounts" :key="acc.id" :value="acc.id">
+          {{ acc.name }}（{{ acc.slug }}）
+        </option>
+      </select>
       <UiButton
         variant="tinted"
         size="sm"
@@ -277,7 +287,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useAnalysisRuns } from '@/composables/useAnalysisRuns'
 import { useRunStream } from '@/composables/useRunStream'
 import { api } from '@/services/api'
-import { useAppStore } from '@/stores/legacy'
+import { useTradingAccountsStore } from '@/stores/tradingAccounts'
 import { formatShortTime, formatTime, statusTone } from '@/utils/formatters'
 import type { ApiDetail, TradeDetail } from '@/types'
 import UiButton from '@/components/ui/UiButton.vue'
@@ -308,7 +318,23 @@ async function getLiveMarkdownRenderer() {
   return liveMarkdownRendererPromise
 }
 
-const store = useAppStore()
+const store = useTradingAccountsStore()
+
+function accountScoped(accountId: number) {
+  return {
+    listRunsPage: (options: Parameters<typeof api.listAccountRunsPage>[1]) =>
+      api.listAccountRunsPage(accountId, options ?? {}),
+    loadRunDetail: (runId: number, opts?: { force?: boolean }) =>
+      store.loadRunDetail(accountId, runId, opts),
+    loadRawToolPreview: (runId: number, previewIndex: number) =>
+      api.getAccountRunRawToolPreview(accountId, runId, previewIndex),
+    runNowStream: (scheduleId?: number, runType?: 'analysis' | 'trade') =>
+      api.runAccountNowStream(accountId, scheduleId, runType),
+    runEventsUrl: (runId: number) => api.accountRunEventsUrl(accountId, runId),
+    deleteRun: (runId: number, force = false) =>
+      api.deleteAccountRun(accountId, runId, force),
+  }
+}
 
 const {
   selectedRun,
@@ -325,16 +351,55 @@ const {
   ensureRawToolPreview,
   loadHistoryRuns,
 } = useAnalysisRuns({
-  listRunsPage: api.listRunsPage,
-  loadRunDetail: store.loadRunDetail,
-  loadRawToolPreview: api.getRunRawToolPreview,
+  listRunsPage: (options) =>
+    store.selectedAccountId === null
+      ? Promise.reject(new Error('请先选择交易账户'))
+      : accountScoped(store.selectedAccountId).listRunsPage(options ?? {}),
+  loadRunDetail: (runId, opts) =>
+    store.selectedAccountId === null
+      ? Promise.reject(new Error('请先选择交易账户'))
+      : store.loadRunDetail(store.selectedAccountId, runId, opts),
+  loadRawToolPreview: (runId, previewIndex) =>
+    store.selectedAccountId === null
+      ? Promise.reject(new Error('请先选择交易账户'))
+      : api.getAccountRunRawToolPreview(store.selectedAccountId, runId, previewIndex),
 })
 
-onMounted(() => {
-  loadInitialRuns({ syncSelection: !liveFocused.value })
-  if (!store.schedules.length) {
-    store.loadSchedule().catch(() => {})
+async function refreshAfterRunCompletion() {
+  if (store.selectedAccountId === null) {
+    return
   }
+  const accountId = store.selectedAccountId
+  await Promise.allSettled([
+    store.refreshAccountOverview(accountId, false),
+    store.refreshRuntimeOverview(accountId),
+    store.loadSchedules(accountId),
+  ])
+}
+
+function handleAccountSwitch(event: Event) {
+  const target = event.target as HTMLSelectElement
+  const accountIdValue = Number(target.value)
+  if (Number.isFinite(accountIdValue)) {
+    store.selectAccount(accountIdValue)
+    const accountId = store.selectedAccountId
+    if (accountId !== null) {
+      void store.loadSchedules(accountId).catch(() => {})
+    }
+    loadInitialRuns({ syncSelection: !liveFocused.value })
+  }
+}
+
+onMounted(() => {
+  store.loadAccounts().then(() => {
+    const accountId = store.selectedAccountId
+    if (accountId !== null) {
+      void store.loadSchedules(accountId).catch(() => {})
+    }
+    loadInitialRuns({ syncSelection: !liveFocused.value })
+  }).catch(() => {
+    loadInitialRuns({ syncSelection: !liveFocused.value })
+  })
 })
 
 const runStream = useRunStream()
@@ -359,21 +424,28 @@ const livePlaceholderVisible = computed(() => {
   return !todayRuns.value.some((item) => item.id === liveRunId.value)
 })
 
+const currentAccountSchedules = computed(() => {
+  if (store.selectedAccountId === null) {
+    return [] as import('@/types').ScheduleConfig[]
+  }
+  return store.account(store.selectedAccountId).schedules
+})
+
 const preMarketScheduleId = computed(() => {
-  const match = store.schedules.find((item) => item.name === '盘前分析')
+  const match = currentAccountSchedules.value.find((item) => item.name === '盘前分析')
   return match?.id ?? null
 })
 
 const manualRunTypeText = computed(() => {
   const match = preMarketScheduleId.value === null
     ? null
-    : store.schedules.find((item) => item.id === preMarketScheduleId.value)
+    : currentAccountSchedules.value.find((item) => item.id === preMarketScheduleId.value)
 
   return match?.run_type === 'trade' ? '交易任务' : '分析任务'
 })
 
 const tradeScheduleId = computed(() => {
-  const match = store.schedules.find((item) => item.run_type === 'trade')
+  const match = currentAccountSchedules.value.find((item) => item.run_type === 'trade')
   return match?.id ?? null
 })
 
@@ -398,12 +470,17 @@ async function startManualRun(options: {
   runTypeLabel: string
 }) {
   if (manualRunning.value) return
+  if (store.selectedAccountId === null) {
+    window.alert('请先选择交易账户')
+    return
+  }
+  const accountId = store.selectedAccountId
   const startedAt = Date.now()
   manualRunning.value = true
   activeManualAction.value = options.action
   liveFocused.value = true
   try {
-    const { run_id } = await api.runNowStream(options.scheduleId, options.runType)
+    const { run_id } = await api.runAccountNowStream(accountId, options.scheduleId, options.runType)
     runStream.start(run_id, {
       startedAt,
       runTypeLabel: options.runTypeLabel,
@@ -438,9 +515,14 @@ async function handleManualTrade() {
 async function handleDeleteRun(runId: number) {
   const confirmed = window.confirm(`确定删除任务 #${runId} 吗？`)
   if (!confirmed) return
+  if (store.selectedAccountId === null) {
+    window.alert('请先选择交易账户')
+    return
+  }
+  const accountId = store.selectedAccountId
 
   try {
-    await api.deleteRun(runId)
+    await api.deleteAccountRun(accountId, runId)
   } catch (error) {
     const message = (error as Error).message || '删除任务失败'
     if (message.includes('运行中的任务不可删除')) {
@@ -449,7 +531,7 @@ async function handleDeleteRun(runId: number) {
       )
       if (!forceConfirmed) return
       try {
-        await api.deleteRun(runId, true)
+        await api.deleteAccountRun(accountId, runId, true)
       } catch (forceError) {
         console.error('[TasksView] force delete run failed', forceError)
         window.alert((forceError as Error).message || '强制删除任务失败')
@@ -468,7 +550,7 @@ async function handleDeleteRun(runId: number) {
   await Promise.all([
     loadInitialRuns({ syncSelection: true }),
     selectedDate.value ? loadHistoryRuns() : Promise.resolve(),
-    store.refreshAfterRunCompletion(),
+    refreshAfterRunCompletion(),
   ])
 }
 
@@ -504,7 +586,7 @@ async function reconcileFinishedRun() {
   const results = await Promise.allSettled([
     loadInitialRuns({ syncSelection: false }),
     refreshRunDetail(runId),
-    store.refreshAfterRunCompletion(),
+    refreshAfterRunCompletion(),
   ])
   const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
   if (failed) {

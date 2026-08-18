@@ -1,17 +1,86 @@
 <template>
   <div class="space-y-5 sm:space-y-6">
     <UiPageHeader title="账户总览" kicker="Overview" description="模拟账户资产、持仓与委托快照">
-      <UiButton
-        variant="tinted"
-        size="sm"
-        :loading="accountRefreshing"
-        :disabled="accountRefreshing || !canManualRefreshAccount"
-        :title="canManualRefreshAccount ? '手动刷新账户信息' : `${accountRefreshCooldownText}后可刷新`"
-        @click="handleManualRefresh"
-      >
-        {{ canManualRefreshAccount ? '刷新' : '冷却中' }}
-      </UiButton>
+      <div class="flex flex-wrap items-center gap-2">
+        <select
+          v-if="store.hasMultipleAccounts"
+          :value="store.selectedAccountId ?? ''"
+          class="input h-9 w-auto py-1"
+          @change="handleAccountSwitch"
+        >
+          <option v-for="acc in store.activeAccounts" :key="acc.id" :value="acc.id">
+            {{ acc.name }}（{{ acc.slug }}）
+          </option>
+        </select>
+        <UiButton
+          variant="tinted"
+          size="sm"
+          :loading="accountRefreshing"
+          :disabled="accountRefreshing || !canManualRefreshAccount"
+          :title="canManualRefreshAccount ? '手动刷新账户信息' : `${accountRefreshCooldownText}后可刷新`"
+          @click="handleManualRefresh"
+        >
+          {{ canManualRefreshAccount ? '刷新' : '冷却中' }}
+        </UiButton>
+      </div>
     </UiPageHeader>
+
+    <!-- 全局聚合（多账户时展示） -->
+    <div v-if="store.hasMultipleAccounts && globalOverview" class="rounded-2xl border border-separator bg-card p-4 shadow-sm">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-callout font-semibold text-label">全账户汇总</h2>
+        <div class="flex flex-wrap items-center gap-2">
+          <span
+            v-for="item in globalOverview.accounts"
+            :key="item.account_id"
+            class="inline-flex items-center gap-1.5 rounded-pill px-2.5 py-1 text-caption"
+            :class="item.status === 'ok' ? 'bg-success-soft text-success-text' : 'bg-danger-soft text-danger-text'"
+          >
+            {{ item.account_name }}
+            <span class="tabular-nums">{{ formatMoney(item.overview?.total_assets) }}</span>
+          </span>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+        <div class="rounded-[10px] bg-fill p-3">
+          <p class="text-footnote text-label-tertiary">总资产</p>
+          <p class="mt-0.5 text-callout font-semibold tabular-nums text-label">{{ formatMoney(globalOverview.aggregate.total_assets) }}</p>
+        </div>
+        <div class="rounded-[10px] bg-fill p-3">
+          <p class="text-footnote text-label-tertiary">现金</p>
+          <p class="mt-0.5 text-callout font-semibold tabular-nums text-label">{{ formatMoney(globalOverview.aggregate.cash_balance) }}</p>
+        </div>
+        <div class="rounded-[10px] bg-fill p-3">
+          <p class="text-footnote text-label-tertiary">持仓市值</p>
+          <p class="mt-0.5 text-callout font-semibold tabular-nums text-label">{{ formatMoney(globalOverview.aggregate.total_market_value) }}</p>
+        </div>
+        <div class="rounded-[10px] bg-fill p-3">
+          <p class="text-footnote text-label-tertiary">初始资金</p>
+          <p class="mt-0.5 text-callout font-semibold tabular-nums text-label">{{ formatMoney(globalOverview.aggregate.initial_capital) }}</p>
+        </div>
+        <div class="rounded-[10px] bg-fill p-3">
+          <p class="text-footnote text-label-tertiary">累计收益</p>
+          <p class="mt-0.5 text-callout font-semibold tabular-nums" :class="profitClass(globalOverview.aggregate.total_return_ratio)">
+            {{ formatPercent(globalOverview.aggregate.total_return_ratio) }}
+          </p>
+        </div>
+        <div class="rounded-[10px] bg-fill p-3">
+          <p class="text-footnote text-label-tertiary">当日盈亏</p>
+          <p class="mt-0.5 text-callout font-semibold tabular-nums" :class="profitClass(globalOverview.aggregate.daily_profit)">
+            {{ formatSignedMoney(globalOverview.aggregate.daily_profit) }}
+          </p>
+        </div>
+        <div class="rounded-[10px] bg-fill p-3">
+          <p class="text-footnote text-label-tertiary">当日收益率</p>
+          <p class="mt-0.5 text-callout font-semibold tabular-nums" :class="profitClass(globalOverview.aggregate.daily_return_ratio)">
+            {{ formatPercent(globalOverview.aggregate.daily_return_ratio) }}
+          </p>
+        </div>
+      </div>
+      <p v-if="globalOverview.errors.length > 0" class="mt-2 text-footnote text-danger-text">
+        部分账户数据获取失败：{{ globalOverview.errors.map((item) => item.account_name).join('、') }}
+      </p>
+    </div>
 
     <!-- Stat cards -->
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -378,16 +447,74 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useAppStore } from '@/stores/legacy'
+import { useTradingAccountsStore } from '@/stores/tradingAccounts'
 import { formatMinuteTime, formatMoney, formatPercent, formatTime } from '@/utils/formatters'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiEmpty from '@/components/ui/UiEmpty.vue'
 import UiPageHeader from '@/components/ui/UiPageHeader.vue'
 import UiPanel from '@/components/ui/UiPanel.vue'
 import UiStatCard from '@/components/ui/UiStatCard.vue'
+import { computed as vueComputed, ref, watch } from 'vue'
 
-const store = useAppStore()
-const { account, runtimeOverview, errorMessage, accountRefreshing, canManualRefreshAccount, accountRefreshCooldownText } = storeToRefs(store)
+const store = useTradingAccountsStore()
+const account = vueComputed(() => {
+  if (store.selectedAccountId === null) {
+    return emptyOverview
+  }
+  const data = store.account(store.selectedAccountId)
+  return data.overview ?? emptyOverview
+})
+const runtimeOverview = vueComputed(() => {
+  if (store.selectedAccountId === null) {
+    return emptyRuntimeOverview
+  }
+  return store.account(store.selectedAccountId).runtimeOverview ?? emptyRuntimeOverview
+})
+const errorMessage = vueComputed(() => {
+  if (store.selectedAccountId === null) {
+    return ''
+  }
+  return store.account(store.selectedAccountId).error
+})
+const accountRefreshing = vueComputed(() => {
+  if (store.selectedAccountId === null) {
+    return false
+  }
+  return store.account(store.selectedAccountId).loading
+})
+const canManualRefreshAccount = ref(true)
+const accountRefreshCooldownText = ref('')
+const globalOverview = vueComputed(() => store.globalOverview)
+
+const emptyOverview = {
+  open_date: null,
+  daily_profit_trade_date: null,
+  operating_days: null,
+  initial_capital: null,
+  total_assets: null,
+  total_market_value: null,
+  cash_balance: null,
+  total_position_ratio: null,
+  holding_profit: null,
+  total_return_ratio: null,
+  nav: null,
+  daily_profit: null,
+  daily_return_ratio: null,
+  positions: [],
+  orders: [],
+  trade_summaries: [],
+  errors: [],
+}
+
+const emptyRuntimeOverview = {
+  last_run: {
+    start_time: '--', end_time: '--', status: 'idle', status_text: '暂无记录',
+    duration: '--', input_tokens: '--', output_tokens: '--', total_tokens: '--',
+  },
+  today: { analysis_count: 0, api_calls: 0, trades: 0, success_rate: 0, input_tokens: '--', output_tokens: '--', total_tokens: '--' },
+  recent_3_days: { analysis_count: 0, api_calls: 0, trades: 0, success_rate: 0, input_tokens: '--', output_tokens: '--', total_tokens: '--' },
+  recent_7_days: { analysis_count: 0, api_calls: 0, trades: 0, success_rate: 0, input_tokens: '--', output_tokens: '--', total_tokens: '--' },
+}
 
 const displayPositions = computed(() => account.value.positions.filter((position) => (position.volume ?? 0) > 0))
 const displayOrders = computed(() => account.value.orders)
@@ -543,21 +670,52 @@ function getNavDelta(nav: number | null | undefined) {
   return nav - 1
 }
 
-onMounted(async () => {
-  const tasks: Promise<unknown>[] = []
-  if (account.value.positions.length === 0) {
-    tasks.push(store.refreshAccountData())
+async function refreshSelected(forceRefresh = false) {
+  if (store.selectedAccountId === null) {
+    return
   }
-  tasks.push(store.refreshRuntimeOverview())
-  if (tasks.length > 0) {
-    const results = await Promise.allSettled(tasks)
-    const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
-    if (failed) {
-      errorMessage.value = failed.reason instanceof Error ? failed.reason.message : '总览数据加载失败'
+  const accountId = store.selectedAccountId
+  const tasks: Promise<unknown>[] = [
+    store.refreshAccountOverview(accountId, forceRefresh),
+    store.refreshRuntimeOverview(accountId),
+  ]
+  if (store.hasMultipleAccounts) {
+    tasks.push(store.refreshGlobalOverview(forceRefresh).catch(() => null))
+  }
+  const results = await Promise.allSettled(tasks)
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+  if (failed) {
+    store.account(accountId).error = failed.reason instanceof Error ? failed.reason.message : '总览数据加载失败'
+  }
+}
+
+watch(
+  () => store.selectedAccountId,
+  (newId, oldId) => {
+    if (newId !== null && newId !== oldId) {
+      void refreshSelected()
+    }
+  },
+)
+
+onMounted(async () => {
+  try {
+    await store.loadAccounts()
+  } catch (exception) {
+    if (store.selectedAccountId !== null) {
+      store.account(store.selectedAccountId).error = (exception as Error).message
+    }
+  }
+  await refreshSelected()
+  if (store.hasMultipleAccounts) {
+    try {
+      await store.refreshGlobalOverview()
+    } catch {
+      // 聚合失败不阻塞页面
     }
   }
   cooldownTimer = window.setInterval(() => {
-    store.touchAccountRefreshTick()
+    canManualRefreshAccount.value = true
   }, 60 * 1000)
 })
 
@@ -567,10 +725,25 @@ onUnmounted(() => {
 
 async function handleManualRefresh() {
   if (!canManualRefreshAccount.value || accountRefreshing.value) return
+  canManualRefreshAccount.value = false
+  accountRefreshCooldownText.value = '1小时后可再次手动刷新'
   try {
-    await store.refreshAccountDataWithCooldown()
+    await refreshSelected(true)
   } catch {
-    // Error message is already synchronized in the store.
+    // 错误信息已同步
+  } finally {
+    window.setTimeout(() => {
+      canManualRefreshAccount.value = true
+      accountRefreshCooldownText.value = ''
+    }, 60 * 60 * 1000)
+  }
+}
+
+function handleAccountSwitch(event: Event) {
+  const target = event.target as HTMLSelectElement
+  const accountId = Number(target.value)
+  if (Number.isFinite(accountId)) {
+    store.selectAccount(accountId)
   }
 }
 </script>

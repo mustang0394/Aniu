@@ -29,6 +29,7 @@ class AppSettingsBase(BaseModel):
     )
     provider_name: str = "openai-compatible"
     mx_api_key: str | None = Field(default=None, max_length=512)
+    uzi_mx_api_key: str | None = Field(default=None, max_length=512)
     llm_base_url: str | None = Field(default=None, max_length=512)
     llm_api_key: str | None = Field(default=None, max_length=512)
     llm_model: str = Field(default="gpt-4o-mini", max_length=128)
@@ -133,6 +134,7 @@ class AppSettingsRead(AppSettingsBase):
             or DEFAULT_APP_DISPLAY_NAME,
             "provider_name": getattr(data, "provider_name", "openai-compatible"),
             "mx_api_key": getattr(data, "mx_api_key", None),
+            "uzi_mx_api_key": getattr(data, "uzi_mx_api_key", None),
             "llm_base_url": getattr(data, "llm_base_url", None),
             "llm_api_key": getattr(data, "llm_api_key", None),
             "llm_model": getattr(data, "llm_model", "gpt-4o-mini"),
@@ -176,6 +178,7 @@ class AppSettingsRead(AppSettingsBase):
         # API keys stay masked in the settings UI (password fields).
         # Telegram Bot Token / Chat ID are plain text so users can copy them.
         self.mx_api_key = _mask_key(self.mx_api_key)
+        self.uzi_mx_api_key = _mask_key(self.uzi_mx_api_key)
         self.llm_api_key = _mask_key(self.llm_api_key)
         return self
 
@@ -239,6 +242,8 @@ class ScheduleRead(ScheduleBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    trading_account_id: int | None = None
+    trading_account_name: str | None = None
     retry_count: int = 0
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
@@ -249,6 +254,7 @@ class ScheduleRead(ScheduleBase):
 
 class ScheduleUpdate(ScheduleBase):
     id: int | None = None
+    trading_account_id: int | None = None
 
 
 class TradeOrderRead(BaseModel):
@@ -307,6 +313,10 @@ class RunSummaryRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    trading_account_id: int | None = None
+    trading_account_name_snapshot: str | None = None
+    llm_config_source: str | None = None
+    llm_model_snapshot: str | None = None
     trigger_source: str
     run_type: str
     schedule_id: int | None = None
@@ -489,6 +499,7 @@ class ChatResponse(BaseModel):
 
 class ChatStreamRequest(BaseModel):
     session_id: int = Field(ge=1)
+    account_id: int | None = Field(default=None, ge=1)
     content: str = Field(default="", max_length=50000)
     attachment_ids: list[int] = Field(default_factory=list, max_length=12)
 
@@ -503,6 +514,7 @@ class ChatSessionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    trading_account_id: int | None = None
     title: str
     kind: str = "user"
     slug: str | None = None
@@ -542,6 +554,7 @@ class PersistentSessionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    trading_account_id: int | None = None
     title: str
     kind: str = "automation"
     slug: str | None = None
@@ -560,6 +573,12 @@ class PersistentSessionMessagesPageRead(BaseModel):
     messages: list[ChatMessageRead] = Field(default_factory=list)
     next_before_id: int | None = None
     has_more: bool = False
+
+
+class GlobalOverviewRead(BaseModel):
+    accounts: list[dict[str, Any]] = Field(default_factory=list)
+    aggregate: dict[str, Any] = Field(default_factory=dict)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):

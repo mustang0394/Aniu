@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Collection
 from pathlib import Path
 
 from app.skills.loader import SkillPackage, discover_skill_packages
@@ -68,10 +69,15 @@ class SkillCatalog:
                 if (pkg := self.find_package(skill_id)) is not None and pkg.can_disable
             }
 
-    def enabled_packages(self) -> list[SkillPackage]:
+    def enabled_packages(
+        self, extra_disabled: Collection[str] | None = None
+    ) -> list[SkillPackage]:
+        """全局启用列表 + 额外的账户级禁用集合（只读过滤，不修改全局状态）。"""
         self.ensure_loaded()
         with self._lock:
             disabled = set(self._disabled)
+            if extra_disabled:
+                disabled.update(extra_disabled)
             return [
                 pkg for pkg in self._packages if self._policy.is_enabled(pkg, disabled)
             ]

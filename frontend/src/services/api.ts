@@ -1,4 +1,4 @@
-import type { AccountOverview, AppSettings, ChatAttachment, ChatRequest, ChatResponse, ChatSession, ChatSessionMessagesPayload, CreateUziReportRequest, CreateUziReportResponse, LoginRequest, LoginResponse, PersistentSession, PersistentSessionMessagesPayload, RawToolPreviewDetail, RunDetail, RunSummary, RunSummaryPage, RuntimeOverview, ScheduleConfig, SkillInfo, SkillListItem, UziReportDetail, UziReportListResponse, UziReportStatus, UziSourceStatus, UziStatus } from '../types.ts'
+import type { AccountLlmTestResult, AccountMxTestResult, AccountOverview, AccountSkillList, AppSettings, ChatAttachment, ChatRequest, ChatResponse, ChatSession, ChatSessionMessagesPayload, CreateUziReportRequest, CreateUziReportResponse, GlobalOverview, LoginRequest, LoginResponse, PersistentSession, PersistentSessionMessagesPayload, RawToolPreviewDetail, RunDetail, RunSummary, RunSummaryPage, RuntimeOverview, ScheduleConfig, SkillInfo, SkillListItem, TradingAccount, TradingAccountPayload, UziReportDetail, UziReportListResponse, UziReportStatus, UziSourceStatus, UziStatus } from '../types.ts'
 import {
   LOGIN_NOTICE_STORAGE_KEY,
   LOGIN_REDIRECT_STORAGE_KEY,
@@ -376,6 +376,215 @@ export const api = {
     return request<AccountOverview>(`${API_PREFIX}/account${suffix}`, {
       timeoutMs: 60000,
     })
+  },
+  getAccountRuntimeOverview(accountId: number) {
+    return request<RuntimeOverview>(`${API_PREFIX}/accounts/${accountId}/runtime-overview`)
+  },
+  getAccountOverview(accountId: number, forceRefresh = false) {
+    const params = new URLSearchParams()
+    if (forceRefresh) {
+      params.set('force_refresh', 'true')
+    }
+    return request<AccountOverview>(
+      `${API_PREFIX}/accounts/${accountId}/overview?${params.toString()}`,
+      { timeoutMs: 60000 },
+    )
+  },
+  getGlobalOverview() {
+    return request<GlobalOverview>(`${API_PREFIX}/overview`, { timeoutMs: 120000 })
+  },
+  // ── 账户管理（多妙想 Key） ───────────────────────────
+  listAccounts(includeArchived = false) {
+    const params = new URLSearchParams()
+    if (includeArchived) {
+      params.set('include_archived', 'true')
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+    return request<TradingAccount[]>(`${API_PREFIX}/accounts${suffix}`)
+  },
+  createAccount(payload: TradingAccountPayload) {
+    return request<TradingAccount>(`${API_PREFIX}/accounts`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+  updateAccount(accountId: number, payload: TradingAccountPayload) {
+    return request<TradingAccount>(`${API_PREFIX}/accounts/${accountId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+  },
+  archiveAccount(accountId: number) {
+    return request<TradingAccount>(`${API_PREFIX}/accounts/${accountId}/archive`, {
+      method: 'POST',
+    })
+  },
+  restoreAccount(accountId: number) {
+    return request<TradingAccount>(`${API_PREFIX}/accounts/${accountId}/restore`, {
+      method: 'POST',
+    })
+  },
+  testAccountMx(accountId: number) {
+    return request<AccountMxTestResult>(`${API_PREFIX}/accounts/${accountId}/test-mx`, {
+      method: 'POST',
+      timeoutMs: 60000,
+    })
+  },
+  testAccountLlm(accountId: number) {
+    return request<AccountLlmTestResult>(`${API_PREFIX}/accounts/${accountId}/test-llm`, {
+      method: 'POST',
+      timeoutMs: 60000,
+    })
+  },
+  getAccountSkills(accountId: number) {
+    return request<AccountSkillList>(`${API_PREFIX}/accounts/${accountId}/skills`)
+  },
+  updateAccountSkills(accountId: number, enabledIds: string[]) {
+    return request<AccountSkillList>(`${API_PREFIX}/accounts/${accountId}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify(enabledIds),
+    })
+  },
+  getAccountSchedule(accountId: number) {
+    return request<ScheduleConfig[]>(`${API_PREFIX}/accounts/${accountId}/schedule`)
+  },
+  updateAccountSchedule(accountId: number, payload: Array<Partial<ScheduleConfig>>) {
+    return request<ScheduleConfig[]>(`${API_PREFIX}/accounts/${accountId}/schedule`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    })
+  },
+  runAccountNow(accountId: number, scheduleId?: number, runType?: 'analysis' | 'trade') {
+    const params = new URLSearchParams()
+    if (typeof scheduleId === 'number') {
+      params.set('schedule_id', String(scheduleId))
+    }
+    if (runType) {
+      params.set('run_type', runType)
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+    return request<RunDetail>(`${API_PREFIX}/accounts/${accountId}/run${suffix}`, {
+      method: 'POST',
+      timeoutMs: 10 * 60 * 1000,
+    })
+  },
+  runAccountNowStream(accountId: number, scheduleId?: number, runType?: 'analysis' | 'trade') {
+    const params = new URLSearchParams()
+    if (typeof scheduleId === 'number') {
+      params.set('schedule_id', String(scheduleId))
+    }
+    if (runType) {
+      params.set('run_type', runType)
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+    return request<{ run_id: number }>(
+      `${API_PREFIX}/accounts/${accountId}/run-stream${suffix}`,
+      { method: 'POST' },
+    )
+  },
+  accountRunEventsUrl(accountId: number, runId: number) {
+    return `${API_PREFIX}/accounts/${accountId}/runs/${runId}/events`
+  },
+  listAccountRuns(accountId: number, options: ListRunsOptions = {}) {
+    const params = new URLSearchParams()
+    params.set('limit', String(options.limit ?? 20))
+    if (options.date) {
+      params.set('date', options.date)
+    }
+    if (options.status) {
+      params.set('status', options.status)
+    }
+    if (typeof options.beforeId === 'number') {
+      params.set('before_id', String(options.beforeId))
+    }
+    return request<RunSummary[]>(
+      `${API_PREFIX}/accounts/${accountId}/runs?${params.toString()}`,
+    )
+  },
+  listAccountRunsPage(accountId: number, options: ListRunsOptions = {}) {
+    const params = new URLSearchParams()
+    params.set('limit', String(options.limit ?? 20))
+    if (options.date) {
+      params.set('date', options.date)
+    }
+    if (options.status) {
+      params.set('status', options.status)
+    }
+    if (typeof options.beforeId === 'number') {
+      params.set('before_id', String(options.beforeId))
+    }
+    return request<RunSummaryPage>(
+      `${API_PREFIX}/accounts/${accountId}/runs-feed?${params.toString()}`,
+    )
+  },
+  getAccountRun(accountId: number, runId: number) {
+    return request<RunDetail>(`${API_PREFIX}/accounts/${accountId}/runs/${runId}`)
+  },
+  getAccountRunRawToolPreview(accountId: number, runId: number, previewIndex: number) {
+    return request<RawToolPreviewDetail>(
+      `${API_PREFIX}/accounts/${accountId}/runs/${runId}/raw-tool-previews/${previewIndex}`,
+    )
+  },
+  deleteAccountRun(accountId: number, runId: number, force = false) {
+    const suffix = force ? '?force=true' : ''
+    return request<void>(`${API_PREFIX}/accounts/${accountId}/runs/${runId}${suffix}`, {
+      method: 'DELETE',
+    })
+  },
+  // ── 账户聊天 ────────────────────────────────────────
+  listAccountChatSessions(accountId: number) {
+    return request<ChatSession[]>(`${API_PREFIX}/accounts/${accountId}/chat/sessions`)
+  },
+  createAccountChatSession(accountId: number, title?: string) {
+    return request<ChatSession>(`${API_PREFIX}/accounts/${accountId}/chat/sessions`, {
+      method: 'POST',
+      body: JSON.stringify(title ? { title } : {}),
+    })
+  },
+  renameAccountChatSession(accountId: number, sessionId: number, title: string) {
+    return request<ChatSession>(
+      `${API_PREFIX}/accounts/${accountId}/chat/sessions/${sessionId}`,
+      { method: 'PATCH', body: JSON.stringify({ title }) },
+    )
+  },
+  deleteAccountChatSession(accountId: number, sessionId: number) {
+    return request<void>(
+      `${API_PREFIX}/accounts/${accountId}/chat/sessions/${sessionId}`,
+      { method: 'DELETE' },
+    )
+  },
+  getAccountChatSessionMessages(
+    accountId: number,
+    sessionId: number,
+    options: ListChatMessagesOptions = {},
+  ) {
+    const params = new URLSearchParams()
+    params.set('limit', String(options.limit ?? 50))
+    if (typeof options.beforeId === 'number') {
+      params.set('before_id', String(options.beforeId))
+    }
+    return request<ChatSessionMessagesPayload>(
+      `${API_PREFIX}/accounts/${accountId}/chat/sessions/${sessionId}/messages?${params.toString()}`,
+    )
+  },
+  getAccountPersistentSession(accountId: number) {
+    return request<PersistentSession>(`${API_PREFIX}/accounts/${accountId}/persistent-session`)
+  },
+  getAccountPersistentSessionMessages(
+    accountId: number,
+    options: ListChatMessagesOptions = {},
+  ) {
+    const params = new URLSearchParams()
+    params.set('limit', String(options.limit ?? 50))
+    if (typeof options.beforeId === 'number') {
+      params.set('before_id', String(options.beforeId))
+    }
+    return request<PersistentSessionMessagesPayload>(
+      `${API_PREFIX}/accounts/${accountId}/persistent-session/messages?${params.toString()}`,
+    )
+  },
+  accountChatSessionStreamUrl(accountId: number) {
+    return `${API_PREFIX}/accounts/${accountId}/chat/stream`
   },
   chat(payload: ChatRequest) {
     return request<ChatResponse>(`${API_PREFIX}/chat`, {

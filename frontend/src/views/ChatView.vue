@@ -5,7 +5,18 @@
       title="AI 聊天"
       kicker="Chat"
       :description="`与 ${appDisplayName} 对话，支持附件与工具调用`"
-    />
+    >
+      <select
+        v-if="store.hasMultipleAccounts"
+        :value="store.selectedAccountId ?? ''"
+        class="input h-9 w-auto py-1"
+        @change="handleAccountSwitch"
+      >
+        <option v-for="acc in store.activeAccounts" :key="acc.id" :value="acc.id">
+          {{ acc.name }}（{{ acc.slug }}）
+        </option>
+      </select>
+    </UiPageHeader>
 
     <div class="relative grid min-h-[min(72vh,760px)] grid-cols-1 gap-3 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)]">
       <!-- Mobile session backdrop -->
@@ -62,7 +73,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import ChatConversation from '@/components/chat/ChatConversation.vue'
@@ -72,10 +83,13 @@ import { useChatSession } from '@/composables/useChatSession'
 import { useChatSessions } from '@/composables/useChatSessions'
 import { usePersistentSession } from '@/composables/usePersistentSession'
 import { useRunStream } from '@/composables/useRunStream'
+import { useTradingAccountsStore } from '@/stores/tradingAccounts'
 import { useAppStore } from '@/stores/legacy'
 
-const store = useAppStore()
-const { appDisplayName } = storeToRefs(store)
+const store = useTradingAccountsStore()
+const accountScope = () => store.selectedAccountId
+const legacyStore = useAppStore()
+const appDisplayName = computed(() => legacyStore.appDisplayName)
 
 const {
   sessions,
@@ -87,7 +101,7 @@ const {
   deleteSession,
   selectSession,
   touchSession,
-} = useChatSessions()
+} = useChatSessions(accountScope)
 
 const {
   messages,
@@ -105,7 +119,7 @@ const {
   sendMessage,
   addAttachment,
   removeAttachment,
-} = useChatSession()
+} = useChatSession(accountScope)
 
 const {
   session: persistentSession,
@@ -119,7 +133,7 @@ const {
   refreshSummaryOnly: refreshPersistentSummaryOnly,
   appendSystemMessage: appendPersistentSystemMessage,
   clear: clearPersistentSession,
-} = usePersistentSession()
+} = usePersistentSession(accountScope)
 
 const runStream = useRunStream()
 
@@ -158,6 +172,11 @@ async function restoreCurrentSession(forceReload = false) {
 }
 
 onMounted(async () => {
+  try {
+    await store.loadAccounts()
+  } catch {
+    // 账户加载失败不阻塞聊天
+  }
   await Promise.all([
     restoreCurrentSession(true),
     refreshPersistentSummaryOnly(),
@@ -174,6 +193,27 @@ const disposeRunStreamListener = runStream.onEvent((event) => {
   }
   appendPersistentSystemMessage(content, new Date().toISOString())
 })
+
+function handleAccountSwitch(event: Event) {
+  const target = event.target as HTMLSelectElement
+  const accountIdValue = Number(target.value)
+  if (Number.isFinite(accountIdValue)) {
+    store.selectAccount(accountIdValue)
+  }
+}
+
+watch(
+  () => store.selectedAccountId,
+  (newId, oldId) => {
+    if (newId === null || newId === oldId) {
+      return
+    }
+    persistentSelected.value = false
+    clearPersistentSession()
+    skipNextSessionLoad.value = false
+    void restoreCurrentSession(true).then(() => refreshPersistentSummaryOnly())
+  },
+)
 
 watch(currentSessionId, async (sessionId) => {
   if (persistentSelected.value) {

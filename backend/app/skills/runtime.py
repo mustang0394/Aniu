@@ -1,6 +1,7 @@
 """Skill runtime that builds tool lists, executes tools, and renders prompts."""
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
 from app.skills.catalog import SkillCatalog
@@ -12,12 +13,24 @@ class SkillRuntime:
         self._catalog = catalog
         self._policy = policy
 
-    def build_tools(self, *, run_type: str | None = None) -> list[dict[str, Any]]:
+    def iter_active_packages(
+        self, disabled_skill_ids: Collection[str] | None = None
+    ) -> list[Any]:
+        return self._catalog.enabled_packages(
+            extra_disabled=set(disabled_skill_ids or ())
+        )
+
+    def build_tools(
+        self,
+        *,
+        run_type: str | None = None,
+        disabled_skill_ids: Collection[str] | None = None,
+    ) -> list[dict[str, Any]]:
         rt = str(run_type or "analysis").strip() or "analysis"
         collected: list[dict[str, Any]] = []
         seen_names: set[str] = set()
         packages = sorted(
-            self._catalog.enabled_packages(),
+            self.iter_active_packages(disabled_skill_ids),
             key=self._policy.tool_sort_key,
         )
         for pkg in packages:
@@ -37,8 +50,9 @@ class SkillRuntime:
         tool_name: str,
         arguments: dict[str, Any],
         context: dict[str, Any],
+        disabled_skill_ids: Collection[str] | None = None,
     ) -> dict[str, Any]:
-        for pkg in self._catalog.enabled_packages():
+        for pkg in self.iter_active_packages(disabled_skill_ids):
             if pkg.skill is None:
                 continue
             if tool_name in pkg.skill.tool_names():
@@ -60,12 +74,18 @@ class SkillRuntime:
             "error": f"未知工具调用: {tool_name}",
         }
 
-    def build_prompt_supplement(self, *, run_type: str | None = None) -> str:
+    def build_prompt_supplement(
+        self,
+        *,
+        run_type: str | None = None,
+        disabled_skill_ids: Collection[str] | None = None,
+    ) -> str:
         rt = str(run_type or "analysis").strip() or "analysis"
         parts: list[str] = []
+        active_packages = self.iter_active_packages(disabled_skill_ids)
 
         runtime_tools = self._policy.runtime_tool_names(
-            self._catalog.enabled_packages(),
+            active_packages,
             run_type=rt,
         )
         if runtime_tools:
@@ -83,7 +103,7 @@ class SkillRuntime:
             )
 
         prompt_packages = self._policy.prompt_packages(
-            self._catalog.enabled_packages(),
+            active_packages,
             run_type=rt,
         )
         always_packages = [pkg for pkg in prompt_packages if pkg.always and pkg.sop_text]

@@ -23,6 +23,7 @@ class AppSettings(Base):
     )
     provider_name: Mapped[str] = mapped_column(String(32), default="openai-compatible")
     mx_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    uzi_mx_api_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     llm_base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     llm_api_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     llm_model: Mapped[str] = mapped_column(String(128), default="gpt-4o-mini")
@@ -87,10 +88,99 @@ class AppSettings(Base):
     )
 
 
+class TradingAccount(Base):
+    """一个妙想 Key 对应一个独立交易账户。
+
+    每个账户是独立的交易子系统：妙想 Key、提示词、市场范围、Skills、
+    自动化会话、定时任务、运行与订单历史、总览缓存均按账户隔离。
+    归档账户不物理删除。
+    """
+
+    __tablename__ = "trading_accounts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    slug: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    mx_api_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    account_llm_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    llm_provider_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    llm_base_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    llm_api_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    llm_reasoning_effort: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    llm_max_retries: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_enable_reasoning_content_echo: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+
+    system_prompt: Mapped[str] = mapped_column(Text, default=DEFAULT_SYSTEM_PROMPT)
+    analyst_prompt: Mapped[str] = mapped_column(
+        Text,
+        default=(
+            "请结合市场数据、资讯、候选股票、持仓和资金情况做判断。"
+            "当信号不明确时返回HOLD。"
+        ),
+    )
+    market_query: Mapped[str] = mapped_column(
+        String(255), default="上证指数今天走势和市场概况"
+    )
+    news_query: Mapped[str] = mapped_column(String(255), default="今天A股市场热点新闻")
+    screener_query: Mapped[str] = mapped_column(
+        String(255), default="A股今天值得关注的强势股"
+    )
+    max_actions: Mapped[int] = mapped_column(Integer, default=2)
+    trade_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    allowed_markets_json: Mapped[str] = mapped_column(
+        Text, default='["sh_main","sz_main"]'
+    )
+
+    disabled_skill_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+
+    automation_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    automation_context_window_tokens: Mapped[int] = mapped_column(
+        Integer, default=128000
+    )
+    automation_recent_message_limit: Mapped[int] = mapped_column(
+        Integer, default=24
+    )
+    automation_enable_auto_compaction: Mapped[bool] = mapped_column(
+        Boolean, default=True
+    )
+    automation_idle_summary_hours: Mapped[int] = mapped_column(Integer, default=12)
+    automation_context_source: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, default="default"
+    )
+    automation_context_detected_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
+    tg_bot_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    tg_chat_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    tg_notify_trade_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    capital_seal_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    capital_seal_amount: Mapped[float] = mapped_column(Float, default=0.0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class StrategySchedule(Base):
     __tablename__ = "strategy_schedules"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    trading_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_accounts.id"),
+        nullable=True,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(64), default="默认调度任务")
     run_type: Mapped[str] = mapped_column(String(32), default="analysis")
     interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
@@ -102,6 +192,8 @@ class StrategySchedule(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     retry_after_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -112,6 +204,16 @@ class StrategyRun(Base):
     __tablename__ = "strategy_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    trading_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_accounts.id"),
+        nullable=True,
+        index=True,
+    )
+    trading_account_name_snapshot: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    llm_config_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    llm_model_snapshot: Mapped[str | None] = mapped_column(String(128), nullable=True)
     trigger_source: Mapped[str] = mapped_column(String(32), default="manual")
     run_type: Mapped[str] = mapped_column(String(32), default="analysis")
     schedule_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -168,6 +270,11 @@ class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    trading_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_accounts.id"),
+        nullable=True,
+        index=True,
+    )
     title: Mapped[str] = mapped_column(String(120), default="新对话")
     kind: Mapped[str] = mapped_column(String(32), default="user", index=True)
     slug: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)

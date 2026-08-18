@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.router import router as aniu_router
+from app.api.accounts_router import router as accounts_router
 from app.api.uzi_router import router as uzi_router
 from app.core.config import get_settings
 from app.core.rate_limit import rate_limit_middleware
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
     app.add_middleware(BaseHTTPMiddleware, dispatch=rate_limit_middleware)
 
     app.include_router(aniu_router)
+    app.include_router(accounts_router)
     app.include_router(uzi_router)
 
     @app.get("/health")

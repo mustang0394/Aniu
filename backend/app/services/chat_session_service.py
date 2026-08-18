@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.database import session_scope
-from app.db.models import ChatAttachment, ChatMessageRecord, ChatSession
+from app.db.models import ChatAttachment, ChatMessageRecord, ChatSession, TradingAccount
 from app.schemas.aniu import (
     ChatAttachmentRead,
     ChatMessageRead,
@@ -29,6 +29,7 @@ from app.schemas.aniu import (
 )
 from app.skills.providers import build_skill_context
 from app.services.llm_service import LLMStreamCancelled, llm_service
+from app.services.account_service import account_service
 
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,7 @@ def _attachment_dict(attachment: ChatAttachment) -> dict[str, Any]:
 def _session_to_read(session: ChatSession, message_count: int = 0) -> ChatSessionRead:
     return ChatSessionRead(
         id=session.id,
+        trading_account_id=session.trading_account_id,
         title=session.title,
         kind=str(session.kind or "user"),
         slug=session.slug,
@@ -441,7 +443,20 @@ class ChatSessionService:
         content_parts.extend(attachment_parts)
         return content_parts
 
-    def list_sessions(self, db: Session) -> list[ChatSessionRead]:
+    def _scope_condition(self, account_id: int):
+        from sqlalchemy import or_
+
+        return or_(
+            ChatSession.trading_account_id == account_id,
+            ChatSession.trading_account_id.is_(None),
+        )
+
+    def list_sessions(
+        self, db: Session, account_id: int | None = None
+    ) -> list[ChatSessionRead]:
+        resolved_account_id = account_service.resolve_single_active_account(
+            db
+        ).id if account_id is None else account_id
         count_sub = (
             select(
                 ChatMessageRecord.session_id,
@@ -453,7 +468,10 @@ class ChatSessionService:
 
         rows = db.execute(
             select(ChatSession, func.coalesce(count_sub.c.count, 0))
-            .where(ChatSession.kind == "user")
+            .where(
+                ChatSession.kind == "user",
+                self._scope_condition(resolved_account_id),
+            )
             .outerjoin(count_sub, count_sub.c.session_id == ChatSession.id)
             .order_by(
                 ChatSession.last_message_at.desc().nullslast(),
@@ -464,21 +482,43 @@ class ChatSessionService:
         return [_session_to_read(session, int(count)) for session, count in rows]
 
     def create_session(
-        self, db: Session, *, title: str | None = None
+        self,
+        db: Session,
+        *,
+        title: str | None = None,
+        account_id: int | None = None,
     ) -> ChatSessionRead:
+        if account_id is None:
+            account = account_service.resolve_single_active_account(db)
+            if account is None:
+                raise LookupError("不存在可用交易账户，请先创建账户。")
+            account_id = account.id
         session = ChatSession(
             title=(title or DEFAULT_SESSION_TITLE).strip() or DEFAULT_SESSION_TITLE,
             kind="user",
+            trading_account_id=account_id,
         )
         db.add(session)
         db.flush()
         return _session_to_read(session, 0)
 
     def rename_session(
-        self, db: Session, session_id: int, *, title: str
+        self,
+        db: Session,
+        session_id: int,
+        *,
+        title: str,
+        account_id: int | None = None,
     ) -> ChatSessionRead:
         session = db.get(ChatSession, session_id)
         if session is None or str(session.kind or "user") != "user":
+            raise LookupError("会话不存在。")
+        if account_id is not None:
+            resolved = account_id
+        else:
+            account = account_service.resolve_single_active_account(db)
+            resolved = account.id if account is not None else 0
+        if int(session.trading_account_id or 0) not in {resolved, 0}:
             raise LookupError("会话不存在。")
         session.title = title.strip() or session.title
         db.flush()
@@ -489,9 +529,18 @@ class ChatSessionService:
         ).scalar_one()
         return _session_to_read(session, int(count))
 
-    def delete_session(self, db: Session, session_id: int) -> None:
+    def delete_session(
+        self, db: Session, session_id: int, account_id: int | None = None
+    ) -> None:
         session = db.get(ChatSession, session_id)
         if session is None or str(session.kind or "user") != "user":
+            raise LookupError("会话不存在。")
+        if account_id is not None:
+            resolved = account_id
+        else:
+            account = account_service.resolve_single_active_account(db)
+            resolved = account.id if account is not None else 0
+        if int(session.trading_account_id or 0) not in {resolved, 0}:
             raise LookupError("会话不存在。")
         db.delete(session)
 
@@ -502,9 +551,14 @@ class ChatSessionService:
         *,
         limit: int = 50,
         before_id: int | None = None,
+        account_id: int | None = None,
     ) -> tuple[ChatSessionRead, list[ChatMessageRead], int | None, bool]:
         session = db.get(ChatSession, session_id)
         if session is None or str(session.kind or "user") != "user":
+            raise LookupError("会话不存在。")
+        if account_id is not None and int(
+            session.trading_account_id or 0
+        ) not in {account_id, 0}:
             raise LookupError("会话不存在。")
 
         page_size = max(1, int(limit))
@@ -674,12 +728,29 @@ class ChatSessionService:
         with session_scope() as db:
             from app.services.aniu_service import aniu_service
 
-            settings = aniu_service.get_or_create_settings(db)
-            if not settings.llm_base_url or not settings.llm_api_key:
+            account = (
+                aniu_service._resolve_account(db, payload.account_id)
+                if payload.account_id is not None
+                else account_service.resolve_single_active_account(db)
+            )
+            if account is None:
+                raise LookupError("不存在可用交易账户，请先创建账户。")
+            settings_snapshot, tool_context = aniu_service._build_account_settings_snapshot(
+                db, account, run_type="chat"
+            )
+            if (
+                not settings_snapshot.llm_base_url
+                or not settings_snapshot.llm_api_key
+            ):
                 raise RuntimeError("未配置大模型接口，无法执行 AI 聊天。")
 
             session = db.get(ChatSession, payload.session_id)
             if session is None or str(session.kind or "user") != "user":
+                raise LookupError("会话不存在。")
+            if int(session.trading_account_id or 0) not in {
+                account.id,
+                0,
+            }:
                 raise LookupError("会话不存在。")
 
             attachments = self._resolve_attachments(db, payload.attachment_ids)
@@ -709,18 +780,6 @@ class ChatSessionService:
                 .all()
             )
             history_messages = self._build_history_messages(history_records)
-            settings_snapshot = SimpleNamespace(
-                mx_api_key=settings.mx_api_key,
-                system_prompt=settings.system_prompt,
-                llm_model=settings.llm_model,
-                llm_base_url=str(settings.llm_base_url),
-                llm_api_key=str(settings.llm_api_key),
-                llm_enable_reasoning_content_echo=getattr(
-                    settings, "llm_enable_reasoning_content_echo", False
-                ),
-                llm_reasoning_effort=getattr(settings, "llm_reasoning_effort", None),
-                llm_max_retries=getattr(settings, "llm_max_retries", 3),
-            )
             session_id = session.id
 
         event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
@@ -739,10 +798,7 @@ class ChatSessionService:
                     system_prompt=settings_snapshot.system_prompt,
                     messages=history_messages,
                     timeout_seconds=180,
-                    tool_context=build_skill_context(
-                        run_type="chat",
-                        app_settings=settings_snapshot,
-                    ),
+                    tool_context=tool_context,
                     emit=_emit,
                     cancel_event=cancel_event,
                     enable_reasoning_echo=getattr(

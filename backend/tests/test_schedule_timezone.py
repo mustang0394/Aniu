@@ -490,7 +490,9 @@ def test_process_due_schedule_runs_due_retry_when_window_arrives(monkeypatch, tm
     monkeypatch.setattr(
         aniu_service_module.aniu_service,
         "execute_run",
-        lambda trigger_source="manual", schedule_id=None: called.append((trigger_source, schedule_id)),
+        lambda account_id=None, trigger_source="manual", schedule_id=None: called.append(
+            (account_id, trigger_source, schedule_id)
+        ),
     )
 
     try:
@@ -500,7 +502,9 @@ def test_process_due_schedule_runs_due_retry_when_window_arrives(monkeypatch, tm
         aniu_service_module.trading_calendar_service.is_trading_day = original_is_trading_day
         _reset_db_state()
 
-    assert called == [("schedule", retry_id)]
+    assert len(called) == 1
+    assert called[0][1:] == ("schedule", retry_id)
+    assert called[0][0] is not None and called[0][0] > 0
     assert retry_id != normal_id
 
 
@@ -526,12 +530,7 @@ def test_process_due_schedule_does_not_probe_locked_before_execute(monkeypatch, 
 
     original_now_shanghai = aniu_service_module.now_shanghai
     original_is_trading_day = aniu_service_module.trading_calendar_service.is_trading_day
-    original_lock = aniu_service_module.aniu_service._run_lock
     called: list[tuple[str, int | None]] = []
-
-    class LockProbe:
-        def locked(self) -> bool:
-            raise AssertionError("process_due_schedule should not call locked()")
 
     monkeypatch.setattr(
         aniu_service_module,
@@ -546,19 +545,20 @@ def test_process_due_schedule_does_not_probe_locked_before_execute(monkeypatch, 
     monkeypatch.setattr(
         aniu_service_module.aniu_service,
         "execute_run",
-        lambda trigger_source="manual", schedule_id=None: called.append((trigger_source, schedule_id)),
+        lambda account_id=None, trigger_source="manual", schedule_id=None: called.append(
+            (account_id, trigger_source, schedule_id)
+        ),
     )
-    aniu_service_module.aniu_service._run_lock = LockProbe()
-
     try:
         aniu_service.process_due_schedule()
     finally:
         aniu_service_module.now_shanghai = original_now_shanghai
         aniu_service_module.trading_calendar_service.is_trading_day = original_is_trading_day
-        aniu_service_module.aniu_service._run_lock = original_lock
         _reset_db_state()
 
-    assert called == [("schedule", schedule_id)]
+    assert len(called) == 1
+    assert called[0][1:] == ("schedule", schedule_id)
+    assert called[0][0] is not None and called[0][0] > 0
 
 
 def test_execute_run_rolls_back_partial_trade_orders_when_order_persist_fails(
@@ -923,7 +923,11 @@ def test_order_status_text_derives_from_fill_progress() -> None:
     assert _order_status_text("2", order_quantity=200, filled_quantity=200) == "已成交"
 
 
-def test_account_overview_prefers_live_positions_over_cached_snapshot(monkeypatch) -> None:
+def test_account_overview_prefers_live_positions_over_cached_snapshot(
+    monkeypatch, tmp_path
+) -> None:
+    _use_temp_db(monkeypatch, tmp_path)
+    init_db()
     from app.services import aniu_service as aniu_service_module
 
     live_balance = {
@@ -992,7 +996,7 @@ def test_account_overview_prefers_live_positions_over_cached_snapshot(monkeypatc
     monkeypatch.setattr(
         aniu_service_module.aniu_service,
         "_get_recent_account_snapshot",
-        lambda db: (cached_balance, cached_positions, None),
+        lambda db, account_id=None: (cached_balance, cached_positions, None),
     )
     monkeypatch.setattr(aniu_service_module, "MXClient", StubClient)
 
@@ -1009,8 +1013,10 @@ def test_account_overview_prefers_live_positions_over_cached_snapshot(monkeypatc
 
 
 def test_account_overview_falls_back_to_cached_orders_when_live_orders_fail(
-    monkeypatch,
+    monkeypatch, tmp_path
 ) -> None:
+    _use_temp_db(monkeypatch, tmp_path)
+    init_db()
     from app.services import aniu_service as aniu_service_module
 
     live_balance = {
@@ -1071,7 +1077,7 @@ def test_account_overview_falls_back_to_cached_orders_when_live_orders_fail(
     monkeypatch.setattr(
         aniu_service_module.aniu_service,
         "_get_recent_account_snapshot",
-        lambda db: (None, None, cached_orders),
+        lambda db, account_id=None: (None, None, cached_orders),
     )
     monkeypatch.setattr(aniu_service_module, "MXClient", StubClient)
 

@@ -5,6 +5,7 @@ export interface AppSettings {
   app_display_name: string
   provider_name: string
   mx_api_key: string | null
+  uzi_mx_api_key: string | null
   llm_base_url: string | null
   llm_api_key: string | null
   llm_model: string
@@ -512,4 +513,126 @@ export interface CreateUziReportRequest {
 export interface CreateUziReportResponse {
   report: UziReportSummary
   reused: boolean
+}
+
+// ── 多账户（多妙想 Key） ────────────────────────────────────────────────
+
+export interface TradingAccount {
+  id: number
+  name: string
+  slug: string
+  enabled: boolean
+  archived: boolean
+  sort_order: number
+  mx_api_key: string | null
+  has_mx_api_key: boolean
+  account_llm_enabled: boolean
+  llm_provider_name: string | null
+  llm_base_url: string | null
+  llm_api_key: string | null
+  llm_model: string | null
+  llm_reasoning_effort: string | null
+  llm_max_retries: number | null
+  llm_enable_reasoning_content_echo: boolean
+  has_account_llm_config: boolean
+  resolved_llm_source: 'account' | 'global' | 'none'
+  system_prompt: string
+  analyst_prompt: string
+  market_query: string
+  news_query: string
+  screener_query: string
+  max_actions: number
+  trade_enabled: boolean
+  allowed_markets: MarketKey[]
+  tg_notify_trade_enabled: boolean
+  capital_seal_enabled: boolean
+  capital_seal_amount: number
+  disabled_skill_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
+export type TradingAccountPayload = Partial<
+  Pick<
+    TradingAccount,
+    | 'name'
+    | 'slug'
+    | 'enabled'
+    | 'account_llm_enabled'
+    | 'llm_provider_name'
+    | 'llm_base_url'
+    | 'llm_api_key'
+    | 'llm_model'
+    | 'llm_reasoning_effort'
+    | 'llm_max_retries'
+    | 'llm_enable_reasoning_content_echo'
+    | 'system_prompt'
+    | 'analyst_prompt'
+    | 'market_query'
+    | 'news_query'
+    | 'screener_query'
+    | 'max_actions'
+    | 'trade_enabled'
+    | 'allowed_markets'
+    | 'tg_notify_trade_enabled'
+    | 'capital_seal_enabled'
+    | 'capital_seal_amount'
+  >
+> & { mx_api_key?: string | null }
+
+export interface AccountSkillStatus {
+  id: string
+  name: string
+  role: 'runtime' | 'standard'
+  always_enabled: boolean
+  can_disable: boolean
+  source: 'builtin' | 'workspace'
+  global_disabled: boolean
+  account_disabled: boolean
+  effective_enabled: boolean
+}
+
+export interface AccountSkillList {
+  global_available: AccountSkillStatus[]
+  global_hard_disabled: string[]
+  account_enabled: string[]
+  effective_enabled: string[]
+  always_enabled: string[]
+}
+
+export interface GlobalAccountOverviewItem {
+  account_id: number
+  account_name: string
+  status: 'ok' | 'error'
+  error?: string | null
+  overview: AccountOverview
+}
+
+export interface GlobalOverview {
+  accounts: GlobalAccountOverviewItem[]
+  aggregate: {
+    initial_capital: number
+    total_assets: number
+    cash_balance: number
+    total_market_value: number
+    holding_profit: number
+    daily_profit: number
+    total_return_ratio: number | null
+    daily_return_ratio: number | null
+  }
+  errors: Array<{ account_id: number; account_name: string; error: string }>
+}
+
+export interface AccountMxTestResult {
+  ok: boolean
+  message: string
+  latency_ms?: number | null
+}
+
+export interface AccountLlmTestResult {
+  ok: boolean
+  message: string
+  source: 'account' | 'global' | 'none'
+  model?: string | null
+  latency_ms?: number | null
 }

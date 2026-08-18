@@ -112,175 +112,33 @@
           </div>
         </section>
 
-        <!-- 妙想接口 -->
+        <!-- UZI 妙想密钥（全局） -->
         <section class="settings-section">
           <header class="settings-section__header">
             <div>
-              <h3 class="settings-section__title">妙想接口</h3>
-              <p class="settings-section__desc">东方财富妙想 OpenAPI（行情 / 资讯 / 模拟交易）</p>
+              <h3 class="settings-section__title">UZI 妙想密钥</h3>
+              <p class="settings-section__desc">UZI 深度报告数据采集使用的全局妙想 Key（不随交易账户变化）</p>
             </div>
           </header>
-          <UiField label="妙想密钥" help="访问东方财富妙想接口的 apikey。">
+          <UiField label="妙想密钥" help="访问东方财富妙想接口的 apikey，仅用于 UZI 报告生成。">
             <input
-              v-model="settings.mx_api_key"
+              :value="uziMxKey"
               type="password"
               placeholder="妙想接口 apikey"
               class="field-input max-w-xl"
+              @input="handleUziKeyInput"
             />
           </UiField>
+          <p class="mt-2 text-footnote text-label-tertiary">
+            各交易账户的妙想 Key 请前往「交易账户」页面配置。
+          </p>
         </section>
 
-        <!-- 交易通知 -->
-        <section class="settings-section">
-          <header class="settings-section__header">
-            <div>
-              <h3 class="settings-section__title">交易通知</h3>
-              <p class="settings-section__desc">交易执行结果通过 Telegram 推送</p>
-            </div>
-          </header>
 
-          <div class="settings-card">
-            <div class="settings-card__row">
-              <div class="min-w-0">
-                <p class="settings-card__title">启用 Telegram 通知</p>
-                <p class="settings-card__hint">开启后，交易执行时向指定聊天推送通知。</p>
-              </div>
-              <UiToggle v-model="settings.tg_notify_trade_enabled" />
-            </div>
 
-            <div
-              class="settings-card__body"
-              :class="settings.tg_notify_trade_enabled ? '' : 'settings-card__body--muted'"
-            >
-              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <UiField label="Bot Token" help="从 @BotFather 获取。">
-                  <input
-                    v-model="settings.tg_bot_token"
-                    type="text"
-                    placeholder="123456:ABC-DEF..."
-                    class="field-input"
-                    autocomplete="off"
-                    spellcheck="false"
-                  />
-                </UiField>
-                <UiField label="Chat ID" help="可通过 @userinfobot 查询。">
-                  <input
-                    v-model="settings.tg_chat_id"
-                    type="text"
-                    placeholder="-100xxxxxxxxxx"
-                    class="field-input"
-                    autocomplete="off"
-                    spellcheck="false"
-                  />
-                </UiField>
-              </div>
-            </div>
-          </div>
-        </section>
 
-        <!-- 交易约束：上下排列、统一卡片 -->
-        <section class="settings-section">
-          <header class="settings-section__header">
-            <div>
-              <h3 class="settings-section__title">交易约束</h3>
-              <p class="settings-section__desc">限制可选市场与策略可用资金</p>
-            </div>
-          </header>
 
-          <div class="space-y-3">
-            <div class="settings-card">
-              <div class="settings-card__head">
-                <div class="min-w-0">
-                  <p class="settings-card__title">选股范围</p>
-                  <p class="settings-card__hint">
-                    勾选允许选股与买入的市场；买入按代码硬拦截，卖出 / 撤单不受限。
-                  </p>
-                </div>
-              </div>
-              <div class="settings-card__body">
-                <div class="market-grid" role="group" aria-label="选股范围">
-                  <label
-                    v-for="option in marketOptions"
-                    :key="option.key"
-                    class="market-chip"
-                    :class="{
-                      'market-chip--active': settings.allowed_markets.includes(option.key),
-                      'market-chip--disabled': busy,
-                    }"
-                  >
-                    <input
-                      type="checkbox"
-                      class="sr-only"
-                      :checked="settings.allowed_markets.includes(option.key)"
-                      :disabled="busy"
-                      @change="toggleMarket(option.key, ($event.target as HTMLInputElement).checked)"
-                    />
-                    <span class="market-chip__check" aria-hidden="true">
-                      <svg viewBox="0 0 16 16" class="size-3.5" fill="none">
-                        <path
-                          d="M3.5 8.5 6.5 11.5 12.5 4.5"
-                          stroke="currentColor"
-                          stroke-width="1.8"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        />
-                      </svg>
-                    </span>
-                    <span class="market-chip__label">{{ option.label }}</span>
-                  </label>
-                </div>
-                <p class="settings-card__footer-hint">
-                  默认仅上证 / 深证 A 股。至少保留一个市场。
-                </p>
-              </div>
-            </div>
 
-            <div class="settings-card">
-              <div class="settings-card__row">
-                <div class="min-w-0">
-                  <p class="settings-card__title">资金封印</p>
-                  <p class="settings-card__hint">
-                    从模拟户中划出不可用于策略的资金；资产 / 可用资金 / 仓位与收益按「真实值 − 封印」投影，持仓明细不减。
-                  </p>
-                </div>
-                <UiToggle v-model="settings.capital_seal_enabled" :disabled="busy" />
-              </div>
-              <div
-                class="settings-card__body"
-                :class="settings.capital_seal_enabled ? '' : 'settings-card__body--muted'"
-              >
-                <UiField label="封印金额（元）">
-                  <input
-                    v-model.number="settings.capital_seal_amount"
-                    type="number"
-                    min="0"
-                    step="1000"
-                    placeholder="例如 900000"
-                    class="field-input max-w-sm"
-                    :disabled="busy || !settings.capital_seal_enabled"
-                  />
-                </UiField>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- 系统提示词 -->
-        <section class="settings-section settings-section--last">
-          <header class="settings-section__header">
-            <div>
-              <h3 class="settings-section__title">系统提示词</h3>
-              <p class="settings-section__desc">定义 AI 角色、目标与决策风格</p>
-            </div>
-          </header>
-          <UiField help="建议写清角色定位、收益目标、风控偏好与输出要求。">
-            <textarea
-              v-model="settings.system_prompt"
-              rows="12"
-              class="field-input field-input--textarea"
-            />
-          </UiField>
-        </section>
       </div>
 
       <div
@@ -427,7 +285,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import { useSkillManager } from '@/composables/useSkillManager'
@@ -452,6 +310,14 @@ const marketOptions: { key: MarketKey; label: string }[] = [
 const store = useAppStore()
 const { settings, busy, errorMessage } = storeToRefs(store)
 const { saveSettings } = store
+
+const uziMxKey = computed(() => {
+  return settings.value.uzi_mx_api_key ?? settings.value.mx_api_key ?? ''
+})
+
+function handleUziKeyInput(event: Event) {
+  settings.value.uzi_mx_api_key = (event.target as HTMLInputElement).value
+}
 const {
   skills,
   importInput,

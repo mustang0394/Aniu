@@ -18,7 +18,11 @@ function prependUniqueMessages(current: ChatMessage[], older: ChatMessage[]): Ch
   return [...dedupedOlder, ...current]
 }
 
-export function usePersistentSession() {
+export function usePersistentSession(accountId?: () => number | null) {
+  function scope(): number | null {
+    return accountId ? accountId() : null
+  }
+
   const session = ref<PersistentSession | null>(null)
   const messages = ref<ChatMessage[]>([])
   const loading = ref(false)
@@ -31,7 +35,10 @@ export function usePersistentSession() {
     loading.value = true
     errorMessage.value = ''
     try {
-      const payload = await api.getPersistentSessionMessages({ limit: MESSAGE_PAGE_SIZE })
+      const account = scope()
+      const payload = account !== null
+        ? await api.getAccountPersistentSessionMessages(account, { limit: MESSAGE_PAGE_SIZE })
+        : await api.getPersistentSessionMessages({ limit: MESSAGE_PAGE_SIZE })
       session.value = payload.session
       messages.value = payload.messages
       hasMoreMessages.value = payload.has_more
@@ -45,7 +52,10 @@ export function usePersistentSession() {
 
   async function refreshSummaryOnly(): Promise<void> {
     try {
-      session.value = await api.getPersistentSession()
+      const account = scope()
+      session.value = account !== null
+        ? await api.getAccountPersistentSession(account)
+        : await api.getPersistentSession()
     } catch (error) {
       errorMessage.value = (error as Error).message
     }
@@ -58,10 +68,10 @@ export function usePersistentSession() {
 
     loadingOlderMessages.value = true
     try {
-      const payload = await api.getPersistentSessionMessages({
-        limit: MESSAGE_PAGE_SIZE,
-        beforeId: nextBeforeId.value,
-      })
+      const account = scope()
+      const payload = account !== null
+        ? await api.getAccountPersistentSessionMessages(account, { limit: MESSAGE_PAGE_SIZE, beforeId: nextBeforeId.value })
+        : await api.getPersistentSessionMessages({ limit: MESSAGE_PAGE_SIZE, beforeId: nextBeforeId.value })
       session.value = payload.session
       messages.value = prependUniqueMessages(messages.value, payload.messages)
       hasMoreMessages.value = payload.has_more

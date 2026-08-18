@@ -25,17 +25,24 @@ function mergeSession(nextSession: ChatSession): void {
   )
 }
 
-export function useChatSessions() {
+export function useChatSessions(accountId?: () => number | null) {
   const currentSession = computed<ChatSession | null>(() => {
     if (currentSessionId.value === null) return null
     return sessions.value.find((item) => item.id === currentSessionId.value) ?? null
   })
 
+  function scope(): number | null {
+    return accountId ? accountId() : null
+  }
+
   async function loadSessions(): Promise<void> {
     loading.value = true
     errorMessage.value = ''
     try {
-      const list = await api.listChatSessions()
+      const account = scope()
+      const list = account !== null
+        ? await api.listAccountChatSessions(account)
+        : await api.listChatSessions()
       sessions.value = sortSessions(list)
     } catch (error) {
       errorMessage.value = (error as Error).message
@@ -45,14 +52,22 @@ export function useChatSessions() {
   }
 
   async function createSession(title?: string): Promise<ChatSession> {
-    const created = await api.createChatSession(title)
+    const account = scope()
+    const created = account !== null
+      ? await api.createAccountChatSession(account, title)
+      : await api.createChatSession(title)
     mergeSession(created)
     currentSessionId.value = created.id
     return created
   }
 
   async function deleteSession(sessionId: number): Promise<void> {
-    await api.deleteChatSession(sessionId)
+    const account = scope()
+    if (account !== null) {
+      await api.deleteAccountChatSession(account, sessionId)
+    } else {
+      await api.deleteChatSession(sessionId)
+    }
     sessions.value = sessions.value.filter((item) => item.id !== sessionId)
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = sessions.value[0]?.id ?? null
@@ -60,8 +75,17 @@ export function useChatSessions() {
   }
 
   async function renameSession(sessionId: number, title: string): Promise<void> {
-    const updated = await api.renameChatSession(sessionId, title)
+    const account = scope()
+    const updated = account !== null
+      ? await api.renameAccountChatSession(account, sessionId, title)
+      : await api.renameChatSession(sessionId, title)
     mergeSession(updated)
+  }
+
+  function reset(): void {
+    sessions.value = []
+    currentSessionId.value = null
+    errorMessage.value = ''
   }
 
   function selectSession(sessionId: number | null): void {
@@ -96,5 +120,6 @@ export function useChatSessions() {
     renameSession,
     selectSession,
     touchSession,
+    reset,
   }
 }

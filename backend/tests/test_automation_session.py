@@ -30,8 +30,8 @@ def create_test_client(monkeypatch, tmp_path) -> TestClient:
     database_module._engine = None
     database_module._session_local = None
     _limiter._buckets.clear()
-    aniu_service._account_overview_cache = None
-    aniu_service._account_overview_cache_expires_at = None
+    aniu_service._account_overview_cache = {}
+    aniu_service._account_overview_cache_expires_at = {}
     app = create_app()
     return TestClient(app)
 
@@ -119,7 +119,7 @@ def test_schedule_runs_share_single_automation_session(monkeypatch, tmp_path) ->
             )
             assert len(messages) == 4
             assert [item.role for item in messages] == ["user", "assistant", "user", "assistant"]
-            assert session.slug == "automation-default"
+            assert session.slug == f"automation-{first_run.trading_account_id}"
 
     reset_db_state()
 
@@ -447,7 +447,11 @@ def test_schedule_run_emits_context_compacted_event(monkeypatch, tmp_path) -> No
             settings.llm_base_url = "https://example.com/v1"
             settings.llm_api_key = "llm-key"
             settings.llm_model = "demo-model"
-            settings.automation_recent_message_limit = 4
+            from app.services.account_service import account_service
+
+            account = account_service.list_accounts(db, include_archived=False)[0]
+            account.automation_recent_message_limit = 4
+            db.add(account)
             schedule = _prepare_schedule(db, name="盘前分析", run_type="analysis")
             schedule_id = schedule.id
 

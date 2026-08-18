@@ -168,8 +168,10 @@ class Skill(BaseSkill):
 
     def do_chat_get_account_summary(self, *, arguments, context):
         ports = get_chat_context_ports(context)
+        account_id = context.get("trading_account_id")
         overview = ports.get_account_overview(
-            force_refresh=_bool_arg(arguments.get("force_refresh", False))
+            account_id=account_id,
+            force_refresh=_bool_arg(arguments.get("force_refresh", False)),
         )
         account = {
             "open_date": overview.get("open_date"),
@@ -199,9 +201,11 @@ class Skill(BaseSkill):
 
     def do_chat_get_positions(self, *, arguments, context):
         ports = get_chat_context_ports(context)
+        account_id = context.get("trading_account_id")
         limit = _clamp_int(arguments.get("limit"), default=20, minimum=1, maximum=100)
         overview = ports.get_account_overview(
-            force_refresh=_bool_arg(arguments.get("force_refresh", False))
+            account_id=account_id,
+            force_refresh=_bool_arg(arguments.get("force_refresh", False)),
         )
         positions = list(overview.get("positions") or [])
         return {
@@ -217,9 +221,11 @@ class Skill(BaseSkill):
 
     def do_chat_get_orders(self, *, arguments, context):
         ports = get_chat_context_ports(context)
+        account_id = context.get("trading_account_id")
         limit = _clamp_int(arguments.get("limit"), default=20, minimum=1, maximum=100)
         overview = ports.get_account_overview(
-            force_refresh=_bool_arg(arguments.get("force_refresh", False))
+            account_id=account_id,
+            force_refresh=_bool_arg(arguments.get("force_refresh", False)),
         )
         orders = list(overview.get("orders") or [])
         return {
@@ -235,6 +241,7 @@ class Skill(BaseSkill):
 
     def do_chat_list_runs(self, *, arguments, context):
         ports = get_chat_context_ports(context)
+        account_id = context.get("trading_account_id")
 
         run_date = None
         date_text = str(arguments.get("date") or "").strip()
@@ -257,6 +264,7 @@ class Skill(BaseSkill):
         with ports.session_scope_factory() as db:
             page = ports.list_runs_page(
                 db,
+                account_id=account_id,
                 limit=limit,
                 run_date=run_date,
                 status=status,
@@ -280,6 +288,7 @@ class Skill(BaseSkill):
 
     def do_chat_get_run_detail(self, *, arguments, context):
         ports = get_chat_context_ports(context)
+        account_id = context.get("trading_account_id")
 
         run_id = arguments.get("run_id")
         try:
@@ -293,7 +302,7 @@ class Skill(BaseSkill):
 
         include_tool_previews = _bool_arg(arguments.get("include_tool_previews", False))
         with ports.session_scope_factory() as db:
-            run = ports.get_run(db, run_id)
+            run = ports.get_run(db, run_id, account_id=account_id)
 
         if run is None:
             return {

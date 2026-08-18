@@ -201,7 +201,10 @@ def get_schedule(
     db: Session = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> list[ScheduleRead]:
-    return aniu_service.list_schedules(db)
+    try:
+        return aniu_service.list_schedules(db)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.put("/schedule", response_model=list[ScheduleRead])
@@ -210,7 +213,10 @@ def update_schedule(
     db: Session = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> list[ScheduleRead]:
-    return aniu_service.replace_schedules(db, payload)
+    try:
+        return aniu_service.replace_schedules(db, payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/run", response_model=RunDetailRead)
@@ -290,13 +296,16 @@ def list_runs(
     db: Session = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> list[RunSummaryRead]:
-    return aniu_service.list_runs(
-        db,
-        limit=limit,
-        run_date=run_date,
-        status=status,
-        before_id=before_id,
-    )
+    try:
+        return aniu_service.list_runs(
+            db,
+            limit=limit,
+            run_date=run_date,
+            status=status,
+            before_id=before_id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runs-feed", response_model=RunSummaryPageRead)
@@ -308,13 +317,16 @@ def list_runs_feed(
     db: Session = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> RunSummaryPageRead:
-    return aniu_service.list_runs_page(
-        db,
-        limit=limit,
-        run_date=run_date,
-        status=status,
-        before_id=before_id,
-    )
+    try:
+        return aniu_service.list_runs_page(
+            db,
+            limit=limit,
+            run_date=run_date,
+            status=status,
+            before_id=before_id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}", response_model=RunDetailRead)
@@ -323,7 +335,10 @@ def get_run(
     db: Session = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> RunDetailRead:
-    run = aniu_service.get_run(db, run_id)
+    try:
+        run = aniu_service.get_run(db, run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if run is None:
         raise HTTPException(status_code=404, detail="运行记录不存在。")
     return run
@@ -343,6 +358,8 @@ def get_run_raw_tool_preview(
         return aniu_service.get_run_raw_tool_preview(db, run_id, preview_index)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.delete("/runs/{run_id}", status_code=204)
@@ -358,6 +375,8 @@ def delete_run(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runtime-overview", response_model=RuntimeOverviewRead)
@@ -365,7 +384,10 @@ def get_runtime_overview(
     db: Session = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> RuntimeOverviewRead:
-    return aniu_service.get_runtime_overview(db)
+    try:
+        return aniu_service.get_runtime_overview(db)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/account", response_model=AccountOverviewRead)
@@ -443,7 +465,10 @@ def list_chat_sessions(
     db: Session = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> list[ChatSessionRead]:
-    return chat_session_service.list_sessions(db)
+    try:
+        return chat_session_service.list_sessions(db)
+    except LookupError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/chat/sessions", response_model=ChatSessionRead)

@@ -769,9 +769,15 @@ class UziReportService:
                 status="stage1_running", phase="stage1_running", progress=5,
                 message="Worker 接受任务，开始数据采集与机械评分。",
             )
-            mx_api_key = db.scalar(
+            settings_row = db.scalar(
                 select(AppSettings).order_by(AppSettings.id).limit(1)
-            ).mx_api_key
+            )
+            # UZI 全局 Key：优先 uzi_mx_api_key；迁移兼容期回退旧 mx_api_key。
+            mx_api_key = (
+                str(getattr(settings_row, "uzi_mx_api_key", None) or "").strip()
+                or str(getattr(settings_row, "mx_api_key", None) or "").strip()
+                or None
+            )
 
         # 恢复语义（§17.1）：先查询 Worker 已有任务状态，避免重启后重复提交。
         worker_state = self._worker.get_job(report_id)

@@ -9,11 +9,20 @@ from app.db.database import session_scope
 
 def build_skill_context(
     *,
-    run_type: str | None,
+    run_type: str | None = None,
     app_settings: Any = None,
     client: Any = None,
     base_context: dict[str, Any] | None = None,
+    trading_account_id: int | None = None,
+    trading_account_name: str | None = None,
+    account_context: Any = None,
 ) -> dict[str, Any]:
+    """组装技能执行上下文。
+
+    账户化运行（阶段 5 §9.3）：妙想工具必须从 context 的 client /
+    mx_client_config 调用；账户 ID、名称、禁用 Skills 集合随上下文注入，
+    禁止 Handler 自己查询全局 AppSettings 推导账户。
+    """
     from app.services.aniu_service import aniu_service
 
     context = dict(base_context or {})
@@ -24,6 +33,17 @@ def build_skill_context(
         context["app_settings"] = app_settings
     if client is not None:
         context["client"] = client
+
+    if trading_account_id is not None:
+        context["trading_account_id"] = trading_account_id
+    if trading_account_name is not None:
+        context["trading_account_name"] = trading_account_name
+    if account_context is not None:
+        context["account_context"] = account_context
+
+    account_disabled = getattr(app_settings, "disabled_skill_ids", None)
+    if account_disabled is not None and "disabled_skill_ids" not in context:
+        context["disabled_skill_ids"] = account_disabled
 
     context.setdefault(
         "chat_context_ports",

@@ -640,6 +640,29 @@ def _json_for_snapshot(
     return _truncate_text(rendered, limit)
 
 
+def _collect_disabled_skill_ids(app_settings: Any) -> set[str]:
+    """从 app_settings 快照收集账户级禁用 Skill ID（全局层由 catalog 承担）。"""
+    if app_settings is None:
+        return set()
+    raw = getattr(app_settings, "disabled_skill_ids", None)
+    if raw is None:
+        raw_json = getattr(app_settings, "disabled_skill_ids_json", None)
+        if raw_json:
+            try:
+                parsed = json.loads(str(raw_json))
+                if isinstance(parsed, list):
+                    raw = parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+    if raw is None:
+        return set()
+    if isinstance(raw, (set, frozenset)):
+        return {str(item) for item in raw}
+    if isinstance(raw, (list, tuple)):
+        return {str(item).strip() for item in raw if str(item).strip()}
+    return set()
+
+
 def _requires_order_evidence(app_settings: Any, run_type: str) -> bool:
     if str(run_type or "").strip() != "trade":
         return False
@@ -836,10 +859,12 @@ class LLMService:
     ) -> str:
         payload_messages: list[dict[str, Any]] = []
         chat_app_settings = (tool_context or {}).get("app_settings")
+        disabled_skill_ids = _collect_disabled_skill_ids(chat_app_settings)
         effective_system_prompt = self._augment_system_prompt(
             system_prompt,
             run_type="chat",
             app_settings=chat_app_settings,
+            disabled_skill_ids=disabled_skill_ids,
         )
         if effective_system_prompt:
             payload_messages.append(
@@ -858,6 +883,7 @@ class LLMService:
                 tool_name=tool_name,
                 arguments=arguments,
                 context=chat_tool_context,
+                disabled_skill_ids=disabled_skill_ids,
             )
 
         chat_reasoning_effort = normalize_reasoning_effort(
@@ -880,15 +906,18 @@ class LLMService:
             max_retries=normalize_max_retries(
                 getattr(chat_app_settings, "llm_max_retries", _DEFAULT_LLM_MAX_RETRIES)
             ),
+            disabled_skill_ids=disabled_skill_ids,
         )
         return str(result["final_answer"] or "").strip() or "模型本轮未返回可展示内容。"
 
     def build_initial_request_payload(self, app_settings: Any) -> dict[str, Any]:
         run_type = str(getattr(app_settings, "run_type", "analysis") or "analysis")
+        disabled_skill_ids = _collect_disabled_skill_ids(app_settings)
         system_prompt = self._augment_system_prompt(
             app_settings.system_prompt,
             run_type=run_type,
             app_settings=app_settings,
+            disabled_skill_ids=disabled_skill_ids,
         )
         payload = {
             "model": app_settings.llm_model,
@@ -897,7 +926,9 @@ class LLMService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": getattr(app_settings, "task_prompt", "")},
             ],
-            "tools": skill_registry.build_tools(run_type=run_type),
+            "tools": skill_registry.build_tools(
+                run_type=run_type, disabled_skill_ids=disabled_skill_ids
+            ),
             "tool_choice": "auto",
         }
         return self._apply_reasoning_effort(
@@ -911,10 +942,12 @@ class LLMService:
         messages: list[dict[str, Any]],
     ) -> dict[str, Any]:
         run_type = str(getattr(app_settings, "run_type", "analysis") or "analysis")
+        disabled_skill_ids = _collect_disabled_skill_ids(app_settings)
         system_prompt = self._augment_system_prompt(
             app_settings.system_prompt,
             run_type=run_type,
             app_settings=app_settings,
+            disabled_skill_ids=disabled_skill_ids,
         )
         payload_messages: list[dict[str, Any]] = []
         if system_prompt:
@@ -924,7 +957,9 @@ class LLMService:
             "model": app_settings.llm_model,
             "temperature": _LLM_TEMPERATURE,
             "messages": payload_messages,
-            "tools": skill_registry.build_tools(run_type=run_type),
+            "tools": skill_registry.build_tools(
+                run_type=run_type, disabled_skill_ids=disabled_skill_ids
+            ),
             "tool_choice": "auto",
         }
         return self._apply_reasoning_effort(
@@ -937,8 +972,11 @@ class LLMService:
         *,
         run_type: str | None = None,
         app_settings: Any = None,
+        disabled_skill_ids: set[str] | None = None,
     ) -> str:
-        supplement = skill_registry.build_prompt_supplement(run_type=run_type)
+        supplement = skill_registry.build_prompt_supplement(
+            run_type=run_type, disabled_skill_ids=disabled_skill_ids
+        )
         market_prompt = build_allowed_markets_prompt(
             get_allowed_markets_from_settings(app_settings)
         )
@@ -988,6 +1026,7 @@ class LLMService:
 
         _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
         run_type = str(getattr(app_settings, "run_type", "analysis") or "analysis")
+        disabled_skill_ids = _collect_disabled_skill_ids(app_settings)
         run_tool_context = build_skill_context(
             run_type=run_type,
             app_settings=app_settings,
@@ -999,6 +1038,7 @@ class LLMService:
                 tool_name=tool_name,
                 arguments=arguments,
                 context=run_tool_context,
+                disabled_skill_ids=disabled_skill_ids,
             )
 
         agent_messages = [dict(message) for message in messages]
@@ -1119,6 +1159,7 @@ class LLMService:
                 ),
                 enforce_freshness=enforce_freshness,
                 freshness_tracker=freshness_tracker,
+                disabled_skill_ids=disabled_skill_ids,
             )
         except Exception as exc:
             freshness_audit = (
@@ -1213,6 +1254,7 @@ class LLMService:
         max_retries: int | None = None,
         enforce_freshness: bool = False,
         freshness_tracker: FreshnessTracker | None = None,
+        disabled_skill_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         _emit = emit if callable(emit) else (lambda *_a, **_kw: None)
         messages: list[dict[str, Any]] = [dict(m) for m in initial_messages]
@@ -1242,7 +1284,9 @@ class LLMService:
             )
             iteration_emit: Callable[..., Any] = final_buffer or _emit
             try:
-                available_tools = skill_registry.build_tools(run_type=run_type)
+                available_tools = skill_registry.build_tools(
+                    run_type=run_type, disabled_skill_ids=disabled_skill_ids
+                )
                 query_only_phase = bool(
                     freshness_enabled and tracker is not None and not tracker.is_ready()
                 )
@@ -1511,6 +1555,7 @@ class LLMService:
         max_retries: int | None = None,
         enforce_freshness: bool = False,
         freshness_tracker: FreshnessTracker | None = None,
+        disabled_skill_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Retry ordinary whole-round failures while preserving safety state.
 
@@ -1556,6 +1601,8 @@ class LLMService:
                             "freshness_tracker": tracker,
                         }
                     )
+                if disabled_skill_ids:
+                    agent_loop_kwargs["disabled_skill_ids"] = disabled_skill_ids
                 result = self._agent_loop(**agent_loop_kwargs)
                 raw_answer = str(result.get("raw_final_answer") or "").strip()
                 if not raw_answer:

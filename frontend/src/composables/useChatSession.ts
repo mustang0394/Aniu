@@ -38,7 +38,11 @@ interface StreamChatResult {
   failedMessage: string | null
 }
 
-export function useChatSession() {
+export function useChatSession(accountId?: () => number | null) {
+  function scope(): number | null {
+    return accountId ? accountId() : null
+  }
+
   const messages = ref<ChatMessage[]>([])
   const input = ref('')
   const pendingAttachments = ref<ChatAttachment[]>([])
@@ -66,9 +70,10 @@ export function useChatSession() {
     if (sessionId === null) return
     loading.value = true
     try {
-      const payload = await api.getChatSessionMessages(sessionId, {
-        limit: MESSAGE_PAGE_SIZE,
-      })
+      const account = scope()
+      const payload = account !== null
+        ? await api.getAccountChatSessionMessages(account, sessionId, { limit: MESSAGE_PAGE_SIZE })
+        : await api.getChatSessionMessages(sessionId, { limit: MESSAGE_PAGE_SIZE })
       messages.value = payload.messages
       hasMoreMessages.value = payload.has_more
       nextBeforeId.value = payload.next_before_id
@@ -93,10 +98,10 @@ export function useChatSession() {
 
     loadingOlderMessages.value = true
     try {
-      const payload = await api.getChatSessionMessages(sessionId, {
-        limit: MESSAGE_PAGE_SIZE,
-        beforeId: nextBeforeId.value,
-      })
+      const account = scope()
+      const payload = account !== null
+        ? await api.getAccountChatSessionMessages(account, sessionId, { limit: MESSAGE_PAGE_SIZE, beforeId: nextBeforeId.value })
+        : await api.getChatSessionMessages(sessionId, { limit: MESSAGE_PAGE_SIZE, beforeId: nextBeforeId.value })
       messages.value = prependUniqueMessages(messages.value, payload.messages)
       hasMoreMessages.value = payload.has_more
       nextBeforeId.value = payload.next_before_id
@@ -213,11 +218,16 @@ export function useChatSession() {
     }
     if (token) headers.Authorization = `Bearer ${token}`
 
-    const response = await fetch(api.chatSessionStreamUrl(), {
+    const account = scope()
+    const streamUrl = account !== null
+      ? api.accountChatSessionStreamUrl(account)
+      : api.chatSessionStreamUrl()
+    const response = await fetch(streamUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         session_id: sessionId,
+        account_id: account ?? undefined,
         content,
         attachment_ids: attachmentIds,
       }),

@@ -54,6 +54,14 @@
       <path d="M16 3v4" />
     </g>
 
+    <!-- accounts: 多账户卡片/钱包 -->
+    <g v-else-if="name === 'accounts'">
+      <rect x="2.5" y="6" width="19" height="13" rx="2.5" />
+      <path d="M2.5 10.5h19" />
+      <path d="M6.5 15.5h4" />
+      <circle cx="18" cy="14" r="1.2" fill="currentColor" stroke="none" />
+    </g>
+
     <!-- settings: cog, center circle + even teeth -->
     <g v-else-if="name === 'settings'">
       <path

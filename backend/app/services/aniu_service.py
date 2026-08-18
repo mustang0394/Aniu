@@ -28,10 +28,20 @@ from app.db.models import (
     ChatSession,
     StrategyRun,
     StrategySchedule,
+    TradingAccount,
     TradeOrder,
 )
 from app.schemas.aniu import AppSettingsUpdate, ChatRequest, ScheduleUpdate
 from app.schemas.aniu import ChatMessageRead, PersistentSessionRead
+from app.schemas.accounts import TradingAccountRead
+from app.services.account_context import (
+    AUTOMATION_SESSION_SLUG_PREFIX,
+    AccountRunContext,
+    build_account_run_context,
+    get_or_create_automation_session,
+    parse_disabled_skill_ids,
+)
+from app.services.account_service import account_service
 from app.skills.providers import build_skill_context
 from app.services.event_bus import event_bus, make_emitter
 from app.services.llm_service import (
@@ -44,6 +54,7 @@ from app.services.token_estimator import estimate_messages_tokens, estimate_text
 from app.services.trading_calendar_service import trading_calendar_service
 from skills.mx_core.client import MXClient
 from skills.mx_core.execution import mx_execution_service
+from skills.mx_core.markets import normalize_allowed_markets
 
 
 logger = logging.getLogger(__name__)
@@ -60,12 +71,12 @@ ACCOUNT_PREFETCH_TOOL_NAMES = (
     "mx_get_orders",
 )
 ACCOUNT_OVERVIEW_CACHE_MAX_WORKERS = 3
-AUTOMATION_SESSION_SLUG = "automation-default"
 AUTOMATION_SESSION_TITLE = "自动化交易会话"
 AUTOMATION_DEFAULT_CONTEXT_WINDOW_TOKENS = 128000
 AUTOMATION_DEFAULT_RECENT_MESSAGE_LIMIT = 24
 AUTOMATION_DEFAULT_IDLE_SUMMARY_HOURS = 12
 AUTOMATION_COMPACTION_TRIGGER_RATIO = 0.85
+SCHEDULE_LEASE_SECONDS = 600
 
 
 @dataclass
@@ -195,10 +206,45 @@ def _order_status_text(
 
 class AniuService:
     def __init__(self) -> None:
-        self._run_lock = Lock()
+        self._account_run_locks: dict[int, Lock] = {}
+        self._account_run_locks_guard = Lock()
         self._account_cache_lock = Lock()
-        self._account_overview_cache: dict[str, Any] | None = None
-        self._account_overview_cache_expires_at: datetime | None = None
+        self._account_overview_cache: dict[int, dict[str, Any]] = {}
+        self._account_overview_cache_expires_at: dict[int, datetime] = {}
+
+    # ── 账户解析助手（旧接口兼容：单账户自动映射，多账户必须显式） ────────
+
+    def _resolve_account_id(
+        self, db: Session, account_id: int | None = None
+    ) -> int:
+        """解析目标账户 ID。
+
+        - 显式提供：直接使用并校验存在。
+        - 未提供：仅当一个未归档账户存在时自动映射；否则拒绝。
+        """
+        if account_id is not None:
+            account = db.get(TradingAccount, account_id)
+            if account is None:
+                raise RuntimeError("交易账户不存在。")
+            return account_id
+        accounts = account_service.list_accounts(db, include_archived=False)
+        if len(accounts) == 1:
+            return accounts[0].id
+        if not accounts:
+            raise RuntimeError("不存在可用交易账户，请先在账户管理中创建。")
+        raise RuntimeError(
+            "存在多个交易账户，必须显式指定账户执行该操作。"
+        )
+
+    def _resolve_account(
+        self, db: Session, account_id: int | None = None
+    ) -> TradingAccount:
+        resolved = self._resolve_account_id(db, account_id)
+        return account_service.require_account(db, resolved)
+
+    def _get_account_run_lock(self, account_id: int) -> Lock:
+        with self._account_run_locks_guard:
+            return self._account_run_locks.setdefault(account_id, Lock())
 
     def _resolve_run_type(self, schedule: StrategySchedule | None) -> str:
         if schedule is None:
@@ -212,31 +258,6 @@ class AniuService:
         if name.startswith("上午运行") or name.startswith("下午运行"):
             return "trade"
         return "analysis"
-
-    def _resolve_manual_run_profile(
-        self,
-        *,
-        settings: AppSettings | Any,
-        manual_run_type: str | None,
-    ) -> tuple[str, str]:
-        normalized = str(manual_run_type or "").strip().lower()
-        if normalized == "trade":
-            return (
-                "trade",
-                "请根据当前市场、持仓和资金情况生成交易决策并执行。"
-                "你必须调用妙想工具获取最新数据，当判断需要买入或卖出时，"
-                "必须通过调用 mx_moni_trade 工具实际下单"
-                "（不要在文本中仅描述交易意图，不调用函数 = 交易不会发生）。"
-                "分析完毕后用自然语言总结本次交易判断、依据和操作结果。",
-            )
-        task_prompt = str(getattr(settings, "task_prompt", "") or "").strip()
-        if task_prompt:
-            return ("analysis", task_prompt)
-        return (
-            "analysis",
-            "请先调用妙想工具获取最新行情、资讯、持仓与资金数据，基于数据给出分析结论，"
-            "并在需要时执行模拟交易。最后用自然语言总结本次判断、依据和操作结果。",
-        )
 
     def _run_agent_supports_emit(self, run_agent: Any) -> bool:
         try:
@@ -311,8 +332,23 @@ class AniuService:
             db.refresh(instance)
         return instance
 
-    def list_schedules(self, db: Session) -> list[StrategySchedule]:
-        stmt = select(StrategySchedule).order_by(StrategySchedule.id.asc())
+    def list_schedules(
+        self, db: Session, account_id: int | None = None
+    ) -> list[StrategySchedule]:
+        resolved_account_id = self._resolve_account_id(db, account_id)
+        from sqlalchemy import or_
+
+        stmt = (
+            select(StrategySchedule)
+            .where(
+                or_(
+                    StrategySchedule.trading_account_id == resolved_account_id,
+                    # 兼容旧库/测试直插的 NULL 归属记录（单账户语义）
+                    StrategySchedule.trading_account_id.is_(None),
+                )
+            )
+            .order_by(StrategySchedule.id.asc())
+        )
         schedules = list(db.scalars(stmt).all())
         mutated = False
         for schedule in schedules:
@@ -347,6 +383,7 @@ class AniuService:
             instance = StrategySchedule(
                 name="默认任务",
                 run_type="analysis",
+                trading_account_id=resolved_account_id,
                 cron_expression="*/30 * * * *",
                 task_prompt="请根据当前市场和持仓情况生成交易决策。",
                 timeout_seconds=1800,
@@ -361,8 +398,18 @@ class AniuService:
             schedule.last_run_at = _assume_utc(schedule.last_run_at)
             schedule.next_run_at = _assume_utc(schedule.next_run_at)
             schedule.retry_after_at = _assume_utc(schedule.retry_after_at)
+            schedule.lease_until = _assume_utc(schedule.lease_until)
             schedule.created_at = _assume_utc(schedule.created_at)
             schedule.updated_at = _assume_utc(schedule.updated_at)
+            if schedule.trading_account_id:
+                schedule_account = db.get(
+                    TradingAccount, schedule.trading_account_id
+                )
+                schedule.trading_account_name = (
+                    schedule_account.name if schedule_account is not None else None
+                )
+            else:
+                schedule.trading_account_name = None
         return schedules
 
     def update_settings(self, db: Session, payload: AppSettingsUpdate) -> AppSettings:
@@ -391,9 +438,16 @@ class AniuService:
         return instance
 
     def replace_schedules(
-        self, db: Session, payloads: list[ScheduleUpdate]
+        self,
+        db: Session,
+        payloads: list[ScheduleUpdate],
+        account_id: int | None = None,
     ) -> list[StrategySchedule]:
-        existing = {item.id: item for item in self.list_schedules(db)}
+        resolved_account_id = self._resolve_account_id(db, account_id)
+        existing = {
+            item.id: item
+            for item in self.list_schedules(db, account_id=resolved_account_id)
+        }
         keep_ids: set[int] = set()
 
         for payload in payloads:
@@ -402,13 +456,14 @@ class AniuService:
             if schedule_id is not None and schedule_id in existing:
                 instance = existing[schedule_id]
             else:
-                instance = StrategySchedule()
+                instance = StrategySchedule(trading_account_id=resolved_account_id)
                 db.add(instance)
                 db.flush()
 
             for field, value in data.items():
                 setattr(instance, field, value)
 
+            instance.trading_account_id = resolved_account_id
             instance.next_run_at = self._compute_next_run_at(instance.cron_expression)
             db.add(instance)
             db.flush()
@@ -420,11 +475,12 @@ class AniuService:
 
         db.commit()
         logger.info(
-            "schedules replaced: kept=%s, deleted=%s",
+            "schedules replaced: account_id=%s kept=%s, deleted=%s",
+            resolved_account_id,
             keep_ids,
             set(existing.keys()) - keep_ids,
         )
-        return self.list_schedules(db)
+        return self.list_schedules(db, account_id=resolved_account_id)
 
     def list_runs(
         self,
@@ -433,8 +489,17 @@ class AniuService:
         run_date: date | None = None,
         status: str | None = None,
         before_id: int | None = None,
+        account_id: int | None = None,
     ) -> list[StrategyRun]:
-        stmt = select(StrategyRun)
+        resolved_account_id = self._resolve_account_id(db, account_id)
+        from sqlalchemy import or_
+
+        stmt = select(StrategyRun).where(
+            or_(
+                StrategyRun.trading_account_id == resolved_account_id,
+                StrategyRun.trading_account_id.is_(None),
+            )
+        )
 
         if run_date is not None:
             start_of_day = datetime.combine(run_date, datetime.min.time())
@@ -466,6 +531,7 @@ class AniuService:
         run_date: date | None = None,
         status: str | None = None,
         before_id: int | None = None,
+        account_id: int | None = None,
     ) -> dict[str, Any]:
         page_size = max(1, limit)
         runs = self.list_runs(
@@ -474,6 +540,7 @@ class AniuService:
             run_date=run_date,
             status=status,
             before_id=before_id,
+            account_id=account_id,
         )
         has_more = len(runs) > page_size
         items = runs[:page_size]
@@ -484,8 +551,10 @@ class AniuService:
             "has_more": has_more,
         }
 
-    def get_runtime_overview(self, db: Session) -> dict[str, Any]:
-        runs = self.list_runs(db, limit=100)
+    def get_runtime_overview(
+        self, db: Session, account_id: int | None = None
+    ) -> dict[str, Any]:
+        runs = self.list_runs(db, limit=100, account_id=account_id)
         latest_run = runs[0] if runs else None
         return {
             "last_run": self._build_runtime_last_run(latest_run),
@@ -500,10 +569,21 @@ class AniuService:
             ),
         }
 
-    def get_run(self, db: Session, run_id: int) -> StrategyRun | None:
+    def get_run(
+        self, db: Session, run_id: int, account_id: int | None = None
+    ) -> StrategyRun | None:
+        resolved_account_id = self._resolve_account_id(db, account_id)
+        from sqlalchemy import or_
+
         stmt = (
             select(StrategyRun)
-            .where(StrategyRun.id == run_id)
+            .where(
+                StrategyRun.id == run_id,
+                or_(
+                    StrategyRun.trading_account_id == resolved_account_id,
+                    StrategyRun.trading_account_id.is_(None),
+                ),
+            )
             .options(selectinload(StrategyRun.trade_orders))
         )
         run = db.scalar(stmt)
@@ -512,9 +592,13 @@ class AniuService:
         return run
 
     def get_run_raw_tool_preview(
-        self, db: Session, run_id: int, preview_index: int
+        self,
+        db: Session,
+        run_id: int,
+        preview_index: int,
+        account_id: int | None = None,
     ) -> dict[str, Any]:
-        run = self.get_run(db, run_id)
+        run = self.get_run(db, run_id, account_id=account_id)
         if run is None:
             raise LookupError("运行记录不存在。")
 
@@ -523,8 +607,13 @@ class AniuService:
             raise LookupError("原始工具预览不存在。")
         return preview
 
-    def get_persistent_session(self, db: Session) -> PersistentSessionRead:
-        session = self._get_or_create_persistent_session(db)
+    def get_persistent_session(
+        self, db: Session, account_id: int | None = None
+    ) -> PersistentSessionRead:
+        resolved_account_id = self._resolve_account_id(db, account_id)
+        session = self._get_or_create_persistent_session(
+            db, trading_account_id=resolved_account_id
+        )
         total_count = db.execute(
             select(func.count(ChatMessageRecord.id)).where(
                 ChatMessageRecord.session_id == session.id
@@ -551,8 +640,12 @@ class AniuService:
         *,
         limit: int = 50,
         before_id: int | None = None,
+        account_id: int | None = None,
     ) -> tuple[PersistentSessionRead, list[ChatMessageRead], int | None, bool]:
-        session = self._get_or_create_persistent_session(db)
+        resolved_account_id = self._resolve_account_id(db, account_id)
+        session = self._get_or_create_persistent_session(
+            db, trading_account_id=resolved_account_id
+        )
         page_size = max(1, int(limit))
         total_count = db.execute(
             select(func.count(ChatMessageRecord.id)).where(
@@ -608,15 +701,33 @@ class AniuService:
             has_more,
         )
 
-    def delete_run(self, db: Session, run_id: int, *, force: bool = False) -> None:
-        run = db.get(StrategyRun, run_id)
+    def delete_run(
+        self,
+        db: Session,
+        run_id: int,
+        *,
+        force: bool = False,
+        account_id: int | None = None,
+    ) -> None:
+        resolved_account_id = self._resolve_account_id(db, account_id)
+        from sqlalchemy import or_
+
+        run = db.scalar(
+            select(StrategyRun).where(
+                StrategyRun.id == run_id,
+                or_(
+                    StrategyRun.trading_account_id == resolved_account_id,
+                    StrategyRun.trading_account_id.is_(None),
+                ),
+            )
+        )
         if run is None:
             raise LookupError("运行记录不存在。")
         if str(run.status or "").strip().lower() in {"running", "pending"}:
             if not force:
                 raise RuntimeError("运行中的任务不可删除，请等待任务结束后重试。")
-            if self._run_lock.locked():
-                raise RuntimeError("当前仍有任务正在执行，暂不能强制删除，请稍后重试。")
+            if self._get_account_run_lock(resolved_account_id).locked():
+                raise RuntimeError("当前账户仍有任务正在执行，暂不能强制删除，请稍后重试。")
 
         related_session_id = run.chat_session_id
         db.execute(delete(ChatMessageRecord).where(ChatMessageRecord.run_id == run_id))
@@ -1183,25 +1294,25 @@ class AniuService:
             orders_result=orders_result,
         )
 
-    def _get_cached_account_overview(self) -> dict[str, Any] | None:
+    def _get_cached_account_overview(self, account_id: int) -> dict[str, Any] | None:
         with self._account_cache_lock:
-            if (
-                self._account_overview_cache is None
-                or self._account_overview_cache_expires_at is None
-                or self._account_overview_cache_expires_at <= now_utc()
-            ):
-                self._account_overview_cache = None
-                self._account_overview_cache_expires_at = None
+            cached = self._account_overview_cache.get(account_id)
+            expires_at = self._account_overview_cache_expires_at.get(account_id)
+            if cached is None or expires_at is None or expires_at <= now_utc():
+                self._account_overview_cache.pop(account_id, None)
+                self._account_overview_cache_expires_at.pop(account_id, None)
                 return None
 
-            return dict(self._account_overview_cache)
+            return dict(cached)
 
-    def _set_cached_account_overview(self, overview: dict[str, Any]) -> None:
+    def _set_cached_account_overview(
+        self, account_id: int, overview: dict[str, Any]
+    ) -> None:
         ttl_seconds = max(0, int(get_settings().account_overview_cache_ttl_seconds))
         if ttl_seconds <= 0:
             with self._account_cache_lock:
-                self._account_overview_cache = None
-                self._account_overview_cache_expires_at = None
+                self._account_overview_cache.pop(account_id, None)
+                self._account_overview_cache_expires_at.pop(account_id, None)
             return
 
         # Keep debug-only upstream payloads out of the process cache to reduce
@@ -1212,8 +1323,8 @@ class AniuService:
         cached_overview.pop("raw_orders", None)
 
         with self._account_cache_lock:
-            self._account_overview_cache = cached_overview
-            self._account_overview_cache_expires_at = now_utc() + timedelta(
+            self._account_overview_cache[account_id] = cached_overview
+            self._account_overview_cache_expires_at[account_id] = now_utc() + timedelta(
                 seconds=ttl_seconds
             )
 
@@ -1322,20 +1433,40 @@ class AniuService:
 
     def get_account_overview(
         self,
+        account_id: int | None = None,
         *,
         include_raw: bool = False,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
+        """读取单个账户的总览（账户级缓存，§10.2）。
+
+        妙想 Client 使用该账户 Key；接口失败时只回退当前账户快照；
+        资金封印使用当前账户配置。
+        """
+        with session_scope() as db:
+            resolved_account_id = self._resolve_account_id(db, account_id)
+            account = account_service.require_account(db, resolved_account_id)
+            settings = self.get_or_create_settings(db)
+
+            account_settings = SimpleNamespace(
+                mx_api_key=str(account.mx_api_key or "").strip()
+                or str(getattr(settings, "mx_api_key", None) or "").strip()
+                or None,
+                mx_api_url=str(get_settings().mx_api_url or "").strip() or None,
+                allowed_markets_json=account.allowed_markets_json,
+                capital_seal_enabled=bool(account.capital_seal_enabled),
+                capital_seal_amount=float(account.capital_seal_amount or 0),
+            )
+            cached_balance_result, cached_positions_result, cached_orders_result = (
+                self._get_recent_account_snapshot(
+                    db, account_id=resolved_account_id
+                )
+            )
+
         if not force_refresh and not include_raw:
-            cached_overview = self._get_cached_account_overview()
+            cached_overview = self._get_cached_account_overview(resolved_account_id)
             if cached_overview is not None:
                 return cached_overview
-
-        with session_scope() as db:
-            settings = self.get_or_create_settings(db)
-            cached_balance_result, cached_positions_result, cached_orders_result = (
-                self._get_recent_account_snapshot(db)
-            )
 
         errors: list[str] = []
         balance_result = cached_balance_result
@@ -1344,7 +1475,7 @@ class AniuService:
         client: MXClient | None = None
         mx_client_config = build_skill_context(
             run_type="chat",
-            app_settings=settings,
+            app_settings=account_settings,
         )["mx_client_config"]
 
         if mx_client_config.get("api_key"):
@@ -1365,7 +1496,7 @@ class AniuService:
                         orders_result=None,
                         errors=[str(exc)],
                         include_raw=include_raw,
-                        app_settings=settings,
+                        app_settings=account_settings,
                     )
 
                 errors.append(f"{str(exc)}，当前展示最近一次任务缓存的账户数据。")
@@ -1375,7 +1506,7 @@ class AniuService:
                     orders_result=orders_result,
                     errors=errors,
                     include_raw=include_raw,
-                    app_settings=settings,
+                    app_settings=account_settings,
                 )
 
         try:
@@ -1438,7 +1569,7 @@ class AniuService:
                     errors=errors
                     or ["未配置 MX API Key，且没有可用缓存账户数据。"],
                     include_raw=include_raw,
-                    app_settings=settings,
+                    app_settings=account_settings,
                 )
         finally:
             if client is not None:
@@ -1450,24 +1581,224 @@ class AniuService:
             orders_result=orders_result,
             errors=errors,
             include_raw=include_raw,
-            app_settings=settings,
+            app_settings=account_settings,
         )
         # Cache sealed overview so chat tools and UI share the same operable funds.
         self._set_cached_account_overview(
+            resolved_account_id,
             self._finalize_account_overview(
                 balance_result=balance_result,
                 positions_result=positions_result,
                 orders_result=orders_result,
                 errors=errors,
                 include_raw=False,
-                app_settings=settings,
-            )
+                app_settings=account_settings,
+            ),
         )
         return overview
 
+    def get_global_overview(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        """全局聚合总览（§10.3）：各账户独立刷新，金额求和，收益率加权。"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with session_scope() as db:
+            accounts = account_service.list_accounts(db, include_archived=False)
+
+        accounts_payload: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+
+        def _fetch(account: TradingAccount) -> dict[str, Any]:
+            try:
+                overview = self.get_account_overview(
+                    account.id, force_refresh=force_refresh
+                )
+                return {
+                    "account_id": account.id,
+                    "account_name": account.name,
+                    "status": "ok",
+                    "overview": overview,
+                }
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "global overview account failed: account_id=%s error=%s",
+                    account.id,
+                    exc,
+                )
+                return {
+                    "account_id": account.id,
+                    "account_name": account.name,
+                    "status": "error",
+                    "error": str(exc),
+                    "overview": self._empty_account_overview([str(exc)]),
+                }
+
+        if len(accounts) <= 1:
+            for account in accounts:
+                payload = _fetch(account)
+                accounts_payload.append(payload)
+                if payload["status"] != "ok":
+                    errors.append(
+                        {
+                            "account_id": account.id,
+                            "account_name": account.name,
+                            "error": payload.get("error"),
+                        }
+                    )
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(len(accounts), ACCOUNT_OVERVIEW_CACHE_MAX_WORKERS)
+            ) as executor:
+                futures = {
+                    executor.submit(_fetch, account): account
+                    for account in accounts
+                }
+                for future in as_completed(futures):
+                    payload = future.result()
+                    accounts_payload.append(payload)
+                    if payload["status"] != "ok":
+                        errors.append(
+                            {
+                                "account_id": payload["account_id"],
+                                "account_name": payload["account_name"],
+                                "error": payload.get("error"),
+                            }
+                        )
+
+        accounts_payload.sort(key=lambda item: item["account_id"])
+
+        def _numeric(
+            item: dict[str, Any], key: str
+        ) -> tuple[float, bool]:
+            value = (item.get("overview") or {}).get(key)
+            try:
+                return float(value), True
+            except (TypeError, ValueError):
+                return 0.0, False
+
+        initial_capital = 0.0
+        total_assets = 0.0
+        cash_balance = 0.0
+        total_market_value = 0.0
+        holding_profit = 0.0
+        daily_profit = 0.0
+        initial_capital_known = False
+        total_assets_known = False
+        for item in accounts_payload:
+            initial_value, initial_ok = _numeric(item, "initial_capital")
+            assets_value, assets_ok = _numeric(item, "total_assets")
+            if initial_ok:
+                initial_capital += initial_value
+                initial_capital_known = True
+            if assets_ok:
+                total_assets += assets_value
+                total_assets_known = True
+            cash_balance += _numeric(item, "cash_balance")[0]
+            total_market_value += _numeric(item, "total_market_value")[0]
+            holding_profit += _numeric(item, "holding_profit")[0]
+            daily_profit += _numeric(item, "daily_profit")[0]
+
+        total_return_ratio = None
+        if total_assets_known and initial_capital_known and initial_capital > 0:
+            total_return_ratio = total_assets / initial_capital - 1
+        daily_return_ratio = None
+        if total_assets_known and total_assets - daily_profit > 0:
+            daily_return_ratio = daily_profit / (total_assets - daily_profit)
+
+        return {
+            "accounts": accounts_payload,
+            "aggregate": {
+                "initial_capital": round(initial_capital, 2),
+                "total_assets": round(total_assets, 2),
+                "cash_balance": round(cash_balance, 2),
+                "total_market_value": round(total_market_value, 2),
+                "holding_profit": round(holding_profit, 2),
+                "daily_profit": round(daily_profit, 2),
+                "total_return_ratio": total_return_ratio,
+                "daily_return_ratio": daily_return_ratio,
+            },
+            "errors": errors,
+        }
+
+    def _build_account_settings_snapshot(
+        self,
+        db: Session,
+        account: TradingAccount,
+        *,
+        run_type: str,
+        task_prompt: str | None = None,
+    ) -> tuple[SimpleNamespace, dict[str, Any]]:
+        """构造账户级 settings 快照 + skill context（运行链/聊天共用）。"""
+        settings = self.get_or_create_settings(db)
+        from app.services.account_context import resolve_llm_config
+
+        llm_config = resolve_llm_config(account, settings)
+        mx_api_key = str(account.mx_api_key or "").strip() or str(
+            getattr(settings, "mx_api_key", None) or ""
+        ).strip() or None
+        snapshot = SimpleNamespace(
+            account_id=account.id,
+            account_name=str(account.name or "").strip() or f"账户{account.id}",
+            run_type=run_type,
+            task_prompt=task_prompt or "",
+            mx_api_key=mx_api_key,
+            mx_api_url=str(get_settings().mx_api_url or "").strip() or None,
+            llm_base_url=llm_config.base_url,
+            llm_api_key=llm_config.api_key,
+            llm_model=llm_config.model,
+            llm_reasoning_effort=llm_config.reasoning_effort,
+            llm_max_retries=llm_config.max_retries,
+            llm_enable_reasoning_content_echo=llm_config.enable_reasoning_content_echo,
+            provider_name=llm_config.provider_name,
+            system_prompt=str(account.system_prompt or ""),
+            analyst_prompt=str(account.analyst_prompt or ""),
+            market_query=str(account.market_query or ""),
+            news_query=str(account.news_query or ""),
+            screener_query=str(account.screener_query or ""),
+            allowed_markets_json=account.allowed_markets_json,
+            allowed_markets=normalize_allowed_markets(account.allowed_markets_json),
+            max_actions=int(account.max_actions or 2),
+            trade_enabled=bool(account.trade_enabled),
+            disabled_skill_ids=parse_disabled_skill_ids(
+                account.disabled_skill_ids_json
+            ),
+            automation_context_window_tokens=int(
+                account.automation_context_window_tokens
+                or AUTOMATION_DEFAULT_CONTEXT_WINDOW_TOKENS
+            ),
+            automation_recent_message_limit=int(
+                account.automation_recent_message_limit
+                or AUTOMATION_DEFAULT_RECENT_MESSAGE_LIMIT
+            ),
+            automation_enable_auto_compaction=bool(
+                account.automation_enable_auto_compaction
+            ),
+            automation_idle_summary_hours=int(
+                account.automation_idle_summary_hours
+                or AUTOMATION_DEFAULT_IDLE_SUMMARY_HOURS
+            ),
+            capital_seal_enabled=bool(account.capital_seal_enabled),
+            capital_seal_amount=float(account.capital_seal_amount or 0),
+            app_display_name=getattr(settings, "app_display_name", "Aniu"),
+            timeout_seconds=1800,
+        )
+        context = build_skill_context(
+            run_type=run_type,
+            app_settings=snapshot,
+            trading_account_id=account.id,
+            trading_account_name=snapshot.account_name,
+        )
+        return snapshot, context
+
     def chat(self, payload: ChatRequest) -> dict[str, Any]:
         with session_scope() as db:
-            settings = self.get_or_create_settings(db)
+            account = self._resolve_account(db, None)
+            settings, tool_context = self._build_account_settings_snapshot(
+                db, account, run_type="chat"
+            )
 
         if not settings.llm_base_url or not settings.llm_api_key:
             raise RuntimeError("未配置大模型接口，无法执行 AI 聊天。")
@@ -1483,7 +1814,7 @@ class AniuService:
             system_prompt=settings.system_prompt,
             messages=messages,
             timeout_seconds=1800,
-            tool_context=build_skill_context(run_type="chat", app_settings=settings),
+            tool_context=tool_context,
             enable_reasoning_echo=getattr(
                 settings, "llm_enable_reasoning_content_echo", False
             ),
@@ -1510,26 +1841,17 @@ class AniuService:
         Runs the LLM agent loop on a worker thread and forwards emitted events
         to subscribers via an in-process queue. No StrategyRun is created."""
         with session_scope() as db:
-            settings = self.get_or_create_settings(db)
+            account = self._resolve_account(db, None)
+            settings_snapshot, tool_context = self._build_account_settings_snapshot(
+                db, account, run_type="chat"
+            )
 
-        if not settings.llm_base_url or not settings.llm_api_key:
+        if not settings_snapshot.llm_base_url or not settings_snapshot.llm_api_key:
             raise RuntimeError("未配置大模型接口，无法执行 AI 聊天。")
 
         messages = [
             {"role": item.role, "content": item.content} for item in payload.messages
         ]
-        settings_snapshot = SimpleNamespace(
-            mx_api_key=settings.mx_api_key,
-            system_prompt=settings.system_prompt,
-            llm_model=settings.llm_model,
-            llm_base_url=str(settings.llm_base_url),
-            llm_api_key=str(settings.llm_api_key),
-            llm_enable_reasoning_content_echo=getattr(
-                settings, "llm_enable_reasoning_content_echo", False
-            ),
-            llm_reasoning_effort=getattr(settings, "llm_reasoning_effort", None),
-            llm_max_retries=getattr(settings, "llm_max_retries", 3),
-        )
 
         event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
         cancel_event = Event()
@@ -1548,10 +1870,7 @@ class AniuService:
                     system_prompt=settings_snapshot.system_prompt,
                     messages=messages,
                     timeout_seconds=180,
-                    tool_context=build_skill_context(
-                        run_type="chat",
-                        app_settings=settings_snapshot,
-                    ),
+                    tool_context=tool_context,
                     emit=_emit,
                     cancel_event=cancel_event,
                     enable_reasoning_echo=getattr(
@@ -1837,106 +2156,43 @@ class AniuService:
 
     def _prepare_run(
         self,
+        *,
         trigger_source: str,
+        account_id: int,
         schedule_id: int | None,
         manual_run_type: str | None = None,
-    ) -> tuple[int, dict[str, Any]]:
+    ) -> tuple[int, AccountRunContext]:
+        """准备一次账户运行：校验账户/任务、构建上下文、创建 StrategyRun（§8.1）。"""
         with session_scope() as db:
             settings = self.get_or_create_settings(db)
-            schedule = (
-                db.get(StrategySchedule, schedule_id) if schedule_id else None
-            )
-            if schedule_id is not None and schedule is None:
-                raise RuntimeError("指定的定时任务不存在。")
-            manual_resolved_run_type, manual_task_prompt = self._resolve_manual_run_profile(
-                settings=settings,
+            account_context = build_account_run_context(
+                db,
+                account_id=account_id,
+                schedule_id=schedule_id,
                 manual_run_type=manual_run_type,
+                global_settings=settings,
             )
             run = StrategyRun(
+                trading_account_id=account_context.account_id,
+                trading_account_name_snapshot=account_context.account_name,
+                llm_config_source=account_context.llm.source,
+                llm_model_snapshot=account_context.llm.model,
                 trigger_source=trigger_source,
-                run_type=schedule.run_type if schedule else manual_resolved_run_type,
-                schedule_id=schedule.id if schedule else None,
-                schedule_name=schedule.name if schedule else None,
+                run_type=account_context.run_type,
+                schedule_id=account_context.schedule_id,
+                schedule_name=account_context.schedule_name,
                 status="running",
             )
             db.add(run)
             db.flush()
             run_id = run.id
-            from skills.mx_core.markets import get_allowed_markets_from_settings
-
-            settings_snapshot = {
-                "id": settings.id,
-                "app_display_name": getattr(settings, "app_display_name", ""),
-                "mx_api_key": settings.mx_api_key,
-                "llm_base_url": settings.llm_base_url,
-                "llm_api_key": settings.llm_api_key,
-                "llm_model": settings.llm_model,
-                "run_type": schedule.run_type if schedule else manual_resolved_run_type,
-                "schedule_id": schedule.id if schedule else None,
-                "schedule_name": schedule.name
-                if schedule
-                else getattr(settings, "schedule_name", None),
-                "system_prompt": settings.system_prompt,
-                "task_prompt": schedule.task_prompt if schedule else manual_task_prompt,
-                "market_query": getattr(settings, "market_query", None),
-                "news_query": getattr(settings, "news_query", None),
-                "timeout_seconds": int(
-                    schedule.timeout_seconds if schedule else 1800
-                ),
-                "automation_session_id": getattr(
-                    settings, "automation_session_id", None
-                ),
-                "automation_context_window_tokens": getattr(
-                    settings,
-                    "automation_context_window_tokens",
-                    AUTOMATION_DEFAULT_CONTEXT_WINDOW_TOKENS,
-                ),
-                "automation_recent_message_limit": getattr(
-                    settings,
-                    "automation_recent_message_limit",
-                    AUTOMATION_DEFAULT_RECENT_MESSAGE_LIMIT,
-                ),
-                "automation_enable_auto_compaction": getattr(
-                    settings, "automation_enable_auto_compaction", True
-                ),
-                "automation_idle_summary_hours": getattr(
-                    settings,
-                    "automation_idle_summary_hours",
-                    AUTOMATION_DEFAULT_IDLE_SUMMARY_HOURS,
-                ),
-                "automation_context_source": getattr(
-                    settings, "automation_context_source", "default"
-                ),
-                "llm_enable_reasoning_content_echo": getattr(
-                    settings, "llm_enable_reasoning_content_echo", False
-                ),
-                "llm_reasoning_effort": getattr(
-                    settings, "llm_reasoning_effort", None
-                ),
-                "llm_max_retries": getattr(settings, "llm_max_retries", 3),
-                "tg_bot_token": getattr(settings, "tg_bot_token", None),
-                "tg_chat_id": getattr(settings, "tg_chat_id", None),
-                "tg_notify_trade_enabled": getattr(
-                    settings, "tg_notify_trade_enabled", False
-                ),
-                "allowed_markets": get_allowed_markets_from_settings(settings),
-                "allowed_markets_json": getattr(
-                    settings, "allowed_markets_json", None
-                ),
-                "capital_seal_enabled": bool(
-                    getattr(settings, "capital_seal_enabled", False)
-                ),
-                "capital_seal_amount": float(
-                    getattr(settings, "capital_seal_amount", 0) or 0
-                ),
-            }
-        return run_id, settings_snapshot
+        return run_id, account_context
 
     def _run_body(
         self,
         *,
         run_id: int,
-        settings_snapshot: dict[str, Any],
+        account_context: AccountRunContext,
         trigger_source: str,
         schedule_id: int | None,
         emit: Any = None,
@@ -1948,8 +2204,9 @@ class AniuService:
 
         try:
             logger.info(
-                "execute_run started: run_id=%s, trigger=%s, schedule_id=%s",
+                "execute_run started: run_id=%s, account_id=%s, trigger=%s, schedule_id=%s",
                 run_id,
+                account_context.account_id,
                 trigger_source,
                 schedule_id,
             )
@@ -1959,18 +2216,25 @@ class AniuService:
                 message="任务已启动",
                 trigger_source=trigger_source,
                 schedule_id=schedule_id,
+                trading_account_id=account_context.account_id,
+                trading_account_name=account_context.account_name,
             )
 
-            settings = SimpleNamespace(**settings_snapshot)
+            settings = SimpleNamespace(**account_context.to_settings_snapshot())
             mx_client_config = build_skill_context(
-                run_type=getattr(settings, "run_type", "analysis"),
+                run_type=account_context.run_type,
                 app_settings=settings,
+                trading_account_id=account_context.account_id,
+                trading_account_name=account_context.account_name,
+                account_context=account_context,
             )["mx_client_config"]
             if not mx_client_config.get("api_key"):
-                raise RuntimeError("未配置 MX API Key，请先在设置页保存后再运行。")
+                raise RuntimeError(
+                    "账户未配置妙想 Key，请先在账户设置中保存后再运行。"
+                )
             client = MXClient(
-                api_key=mx_client_config.get("api_key"),
-                base_url=mx_client_config.get("base_url"),
+                api_key=account_context.mx_api_key,
+                base_url=account_context.mx_api_base_url,
             )
             try:
                 _emit("stage", stage="llm", message="正在调用大模型")
@@ -1979,6 +2243,7 @@ class AniuService:
                     settings=settings,
                     trigger_source=trigger_source,
                     schedule_id=schedule_id,
+                    trading_account_id=account_context.account_id,
                 )
                 decision, llm_request, llm_response, runtime_trace = (
                     llm_service.run_agent_with_messages(
@@ -2073,6 +2338,9 @@ class AniuService:
                         schedule.last_run_at = completed_at
                         schedule.retry_count = 0
                         schedule.retry_after_at = None
+                        # 完成即释放租约（§11.5）
+                        schedule.lease_token = None
+                        schedule.lease_until = None
                         schedule.next_run_at = self._compute_next_run_at(
                             schedule.cron_expression,
                             from_time=completed_at_shanghai,
@@ -2159,20 +2427,20 @@ class AniuService:
                 )
 
             # --- Telegram notification for trade orders ---
-            if settings_snapshot.get("tg_notify_trade_enabled") and persisted_trade_orders:
+            if account_context.tg_notify_trade_enabled and persisted_trade_orders:
                 from app.services.notification_service import send_telegram_trade_notification
                 try:
                     send_telegram_trade_notification(
-                        bot_token=settings_snapshot.get("tg_bot_token") or "",
-                        chat_id=settings_snapshot.get("tg_chat_id") or "",
+                        bot_token=account_context.tg_bot_token or "",
+                        chat_id=account_context.tg_chat_id or "",
                         trade_orders=[
                             action for action in executed_actions
                             if str(action.get("action") or "") in {"BUY", "SELL"}
                         ],
                         run_id=run_id,
                         trigger_source=trigger_source,
-                        schedule_name=settings_snapshot.get("schedule_name"),
-                        app_display_name=settings_snapshot.get("app_display_name") or "",
+                        schedule_name=account_context.schedule_name,
+                        app_display_name=account_context.account_name or "",
                     )
                 except Exception:
                     logger.warning(
@@ -2264,7 +2532,7 @@ class AniuService:
                         if session is not None:
                             assistant_content = self._build_persistent_session_assistant_content(
                                 run_id=run_id,
-                                run_type=str(settings_snapshot.get("run_type") or "analysis"),
+                                run_type=account_context.run_type,
                                 status="failed",
                                 final_answer=None,
                                 tool_calls=None,
@@ -2282,7 +2550,7 @@ class AniuService:
                                 meta_payload={
                                     "phase": automation_phase,
                                     "run_type": str(
-                                        settings_snapshot.get("run_type") or "analysis"
+                                        account_context.run_type
                                     ),
                                 },
                             )
@@ -2293,6 +2561,9 @@ class AniuService:
                     schedule = db.get(StrategySchedule, schedule_id)
                     if schedule is not None:
                         schedule.last_run_at = now_utc()
+                        # 失败也要释放租约（§11.5），重试由 retry_after_at 机制驱动
+                        schedule.lease_token = None
+                        schedule.lease_until = None
                         schedule.next_run_at = self._compute_next_run_at(
                             schedule.cron_expression,
                             from_time=now_shanghai(),
@@ -2323,29 +2594,38 @@ class AniuService:
 
     def execute_run(
         self,
+        *,
+        account_id: int | None = None,
         trigger_source: str = "manual",
         schedule_id: int | None = None,
         manual_run_type: str | None = None,
     ) -> StrategyRun:
-        if not self._run_lock.acquire(blocking=False):
-            raise RuntimeError("已有运行中的任务，请稍后再试。")
+        """账户级串行执行（§11.1）：同一账户互斥，不同账户可并发。"""
+        with session_scope() as db:
+            resolved_account_id = self._resolve_account_id(db, account_id)
+        lock = self._get_account_run_lock(resolved_account_id)
+        if not lock.acquire(blocking=False):
+            raise RuntimeError("该账户已有任务正在运行，请稍后再试。")
         try:
-            run_id, settings_snapshot = self._prepare_run(
-                trigger_source,
-                schedule_id,
-                manual_run_type,
+            run_id, account_context = self._prepare_run(
+                trigger_source=trigger_source,
+                account_id=resolved_account_id,
+                schedule_id=schedule_id,
+                manual_run_type=manual_run_type,
             )
             return self._run_body(
                 run_id=run_id,
-                settings_snapshot=settings_snapshot,
+                account_context=account_context,
                 trigger_source=trigger_source,
                 schedule_id=schedule_id,
             )
         finally:
-            self._run_lock.release()
+            lock.release()
 
     def start_run_async(
         self,
+        *,
+        account_id: int | None = None,
         trigger_source: str = "manual",
         schedule_id: int | None = None,
         manual_run_type: str | None = None,
@@ -2354,18 +2634,22 @@ class AniuService:
 
         Event stream: subscribe via ``event_bus`` using the returned run_id.
         """
-        if not self._run_lock.acquire(blocking=False):
-            raise RuntimeError("已有运行中的任务，请稍后再试。")
+        with session_scope() as db:
+            resolved_account_id = self._resolve_account_id(db, account_id)
+        lock = self._get_account_run_lock(resolved_account_id)
+        if not lock.acquire(blocking=False):
+            raise RuntimeError("该账户已有任务正在运行，请稍后再试。")
 
         run_id: int | None = None
         try:
-            run_id, settings_snapshot = self._prepare_run(
-                trigger_source,
-                schedule_id,
-                manual_run_type,
+            run_id, account_context = self._prepare_run(
+                trigger_source=trigger_source,
+                account_id=resolved_account_id,
+                schedule_id=schedule_id,
+                manual_run_type=manual_run_type,
             )
         except Exception:
-            self._run_lock.release()
+            lock.release()
             raise
 
         emit = make_emitter(run_id)
@@ -2374,7 +2658,7 @@ class AniuService:
             try:
                 self._run_body(
                     run_id=run_id,
-                    settings_snapshot=settings_snapshot,
+                    account_context=account_context,
                     trigger_source=trigger_source,
                     schedule_id=schedule_id,
                     emit=emit,
@@ -2383,7 +2667,7 @@ class AniuService:
             except Exception:
                 logger.exception("async run worker failed: run_id=%s", run_id)
             finally:
-                self._run_lock.release()
+                lock.release()
 
         Thread(
             target=_worker,
@@ -2393,55 +2677,143 @@ class AniuService:
         return run_id
 
     def process_due_schedule(self) -> None:
-        due_schedule_id: int | None = None
+        """账户级调度（§11.4）：lease 原子抢占，按账户分组并发派发。"""
+        now_sh = now_shanghai()
+        now = (
+            now_sh.astimezone(timezone.utc)
+            if now_sh.tzinfo is not None
+            else now_sh.replace(tzinfo=timezone.utc)
+        )
+        # SQLite 存储为 naive UTC 字符串，SQL 比较统一绑定 naive UTC。
+        now_naive = now.replace(tzinfo=None)
+
+        from sqlalchemy import update as sa_update
+
+        def _clear_lease(db: Session, schedule_id: int) -> None:
+            schedule = db.get(StrategySchedule, schedule_id)
+            if schedule is not None:
+                schedule.lease_token = None
+                schedule.lease_until = None
+                db.add(schedule)
+
         with session_scope() as db:
-            schedules = self.list_schedules(db)
-            now = now_shanghai()
-            earliest_due_at: datetime | None = None
+            schedules = db.scalars(
+                select(StrategySchedule).where(StrategySchedule.enabled.is_(True))
+            ).all()
+
+            if not trading_calendar_service.is_trading_day(now_sh.date()):
+                for schedule in schedules:
+                    schedule.next_run_at = self._compute_next_run_at(
+                        schedule.cron_expression,
+                        from_time=now_sh,
+                    )
+                    db.add(schedule)
+                return
+
+            due: list[StrategySchedule] = []
             for schedule in schedules:
-                if not schedule.enabled:
-                    continue
                 if schedule.next_run_at is None:
                     schedule.next_run_at = self._compute_next_run_at(
                         schedule.cron_expression
                     )
                     db.add(schedule)
                     continue
-                if not trading_calendar_service.is_trading_day(now.date()):
-                    schedule.next_run_at = self._compute_next_run_at(
-                        schedule.cron_expression,
-                        from_time=now,
-                    )
-                    db.add(schedule)
-                    continue
+                next_run_at = _assume_utc(schedule.next_run_at)
                 retry_after_at = _assume_utc(schedule.retry_after_at)
-                if retry_after_at is not None:
-                    retry_due = retry_after_at.astimezone(SHANGHAI_TZ)
-                    if retry_due <= now:
-                        if earliest_due_at is None or retry_due < earliest_due_at:
-                            earliest_due_at = retry_due
-                            due_schedule_id = schedule.id
-                        continue
-                if (
-                    schedule.next_run_at is not None
-                    and schedule.next_run_at.astimezone(SHANGHAI_TZ) <= now
+                if next_run_at <= now or (
+                    retry_after_at is not None and retry_after_at <= now
                 ):
-                    schedule_due = schedule.next_run_at.astimezone(SHANGHAI_TZ)
-                    if earliest_due_at is None or schedule_due < earliest_due_at:
-                        earliest_due_at = schedule_due
-                        due_schedule_id = schedule.id
+                    due.append(schedule)
 
-        if due_schedule_id is not None:
-            try:
-                self.execute_run(trigger_source="schedule", schedule_id=due_schedule_id)
-            except RuntimeError as exc:
-                if "已有运行中的任务" in str(exc):
-                    logger.info(
-                        "process_due_schedule skipped because another run is active: schedule_id=%s",
-                        due_schedule_id,
+            claimed_ids: list[tuple[int, int]] = []
+            for schedule in due:
+                # 原子抢占：受影响行数为 1 表示抢占成功，0 表示跳过。
+                result = db.execute(
+                    sa_update(StrategySchedule)
+                    .where(
+                        StrategySchedule.id == schedule.id,
+                        StrategySchedule.enabled.is_(True),
+                        (
+                            (StrategySchedule.lease_until.is_(None))
+                            | (StrategySchedule.lease_until < now_naive)
+                        ),
+                        (
+                            (StrategySchedule.retry_after_at.is_(None))
+                            | (StrategySchedule.retry_after_at <= now_naive)
+                        ),
+                        (
+                            (StrategySchedule.next_run_at <= now_naive)
+                            | (StrategySchedule.retry_after_at <= now_naive)
+                        ),
                     )
-                    return
-                raise
+                    .values(
+                        lease_token=secrets.token_hex(16),
+                        lease_until=now_naive
+                        + timedelta(seconds=SCHEDULE_LEASE_SECONDS),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if result.rowcount == 1:
+                    claimed_ids.append(
+                        (schedule.id, int(schedule.trading_account_id or 0))
+                    )
+            db.commit()
+
+            if not claimed_ids:
+                return
+
+            # 同一账户同一轮只派发一个任务；不同账户允许并发。
+            dispatched_accounts: set[int] = set()
+            for schedule_id, account_id in claimed_ids:
+                if account_id in dispatched_accounts:
+                    with session_scope() as db2:
+                        _clear_lease(db2, schedule_id)
+                    continue
+                if account_id <= 0:
+                    # 旧库/直插的 NULL 归属任务：回填默认账户。
+                    with session_scope() as db2:
+                        account = account_service.resolve_single_active_account(db2)
+                        if account is None:
+                            _clear_lease(db2, schedule_id)
+                            continue
+                        account_id = account.id
+                        schedule = db2.get(StrategySchedule, schedule_id)
+                        if schedule is not None:
+                            schedule.trading_account_id = account_id
+                            db2.add(schedule)
+                dispatched_accounts.add(account_id)
+                try:
+                    self.execute_run(
+                        account_id=account_id,
+                        trigger_source="schedule",
+                        schedule_id=schedule_id,
+                    )
+                except RuntimeError as exc:
+                    if "已有任务正在运行" in str(exc):
+                        logger.info(
+                            "process_due_schedule skipped (account busy): schedule_id=%s account_id=%s",
+                            schedule_id,
+                            account_id,
+                        )
+                        # 账户锁竞争失败：保留任务待下一轮。
+                        with session_scope() as db2:
+                            _clear_lease(db2, schedule_id)
+                        continue
+                    logger.exception(
+                        "process_due_schedule run failed: schedule_id=%s account_id=%s",
+                        schedule_id,
+                        account_id,
+                    )
+                    with session_scope() as db2:
+                        _clear_lease(db2, schedule_id)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "process_due_schedule run failed: schedule_id=%s account_id=%s",
+                        schedule_id,
+                        account_id,
+                    )
+                    with session_scope() as db2:
+                        _clear_lease(db2, schedule_id)
 
     def _safe_call(self, func: Any) -> dict[str, Any]:
         try:
@@ -2450,13 +2822,26 @@ class AniuService:
             return {"ok": False, "error": str(exc)}
 
     def _get_recent_account_snapshot(
-        self, db: Session
+        self, db: Session, account_id: int | None = None
     ) -> tuple[
         dict[str, Any] | None,
         dict[str, Any] | None,
         dict[str, Any] | None,
     ]:
-        stmt = select(StrategyRun).order_by(StrategyRun.started_at.desc()).limit(20)
+        resolved_account_id = self._resolve_account_id(db, account_id)
+        from sqlalchemy import or_
+
+        stmt = (
+            select(StrategyRun)
+            .where(
+                or_(
+                    StrategyRun.trading_account_id == resolved_account_id,
+                    StrategyRun.trading_account_id.is_(None),
+                )
+            )
+            .order_by(StrategyRun.started_at.desc())
+            .limit(20)
+        )
 
         balance_result: dict[str, Any] | None = None
         positions_result: dict[str, Any] | None = None
@@ -2564,9 +2949,17 @@ class AniuService:
         settings: Any,
         trigger_source: str,
         schedule_id: int | None,
+        trading_account_id: int | None = None,
     ) -> PersistentRunSessionContext:
+        resolved_account_id = trading_account_id or int(
+            getattr(settings, "account_id", 0) or 0
+        )
         with session_scope() as db:
-            session = self._get_or_create_persistent_session(db)
+            if resolved_account_id <= 0:
+                resolved_account_id = self._resolve_account_id(db, None)
+            session = self._get_or_create_persistent_session(
+                db, trading_account_id=resolved_account_id
+            )
             user_content = self._build_persistent_session_user_content(
                 settings=settings,
                 trigger_source=trigger_source,
@@ -2634,49 +3027,21 @@ class AniuService:
                 messages=messages,
             )
 
-    def _get_or_create_persistent_session(self, db: Session) -> ChatSession:
-        settings = self.get_or_create_settings(db)
-        session_id = int(getattr(settings, "automation_session_id", 0) or 0)
-        if session_id > 0:
-            existing = db.get(ChatSession, session_id)
-            if existing is not None and str(existing.kind or "") == "automation":
-                return existing
-
-        session = db.scalar(
-            select(ChatSession).where(
-                ChatSession.kind == "automation",
-                ChatSession.slug == AUTOMATION_SESSION_SLUG,
-            )
+    def _get_or_create_persistent_session(
+        self, db: Session, *, trading_account_id: int
+    ) -> ChatSession:
+        """按账户获取/创建自动化会话（slug=automation-{account_id}，§8.4）。"""
+        account = db.get(TradingAccount, trading_account_id)
+        if account is None:
+            raise RuntimeError("交易账户不存在。")
+        previous_session_id = int(getattr(account, "automation_session_id", 0) or 0)
+        session = get_or_create_automation_session(
+            db,
+            account_id=trading_account_id,
+            previous_session_id=previous_session_id,
         )
-        if session is None:
-            session = ChatSession(
-                title=AUTOMATION_SESSION_TITLE,
-                kind="automation",
-                slug=AUTOMATION_SESSION_SLUG,
-            )
-            db.add(session)
-            db.flush()
-
-        settings.automation_session_id = session.id
-        settings.automation_context_window_tokens = int(
-            getattr(settings, "automation_context_window_tokens", None)
-            or AUTOMATION_DEFAULT_CONTEXT_WINDOW_TOKENS
-        )
-        settings.automation_recent_message_limit = int(
-            getattr(settings, "automation_recent_message_limit", None)
-            or AUTOMATION_DEFAULT_RECENT_MESSAGE_LIMIT
-        )
-        settings.automation_idle_summary_hours = int(
-            getattr(settings, "automation_idle_summary_hours", None)
-            or AUTOMATION_DEFAULT_IDLE_SUMMARY_HOURS
-        )
-        settings.automation_context_source = (
-            str(getattr(settings, "automation_context_source", "") or "").strip()
-            or "default"
-        )
-        settings.automation_context_detected_at = now_utc()
-        if hasattr(settings, "_sa_instance_state"):
-            db.add(settings)
+        account.automation_session_id = session.id
+        db.add(account)
         return session
 
     def _build_persistent_session_user_content(

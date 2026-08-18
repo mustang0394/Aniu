@@ -1,6 +1,7 @@
 """Thin facade that exposes the skill catalog and runtime through one object."""
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -39,8 +40,15 @@ class SkillRegistry:
     def all_packages(self) -> list[SkillPackage]:
         return self._catalog.all_packages()
 
-    def build_tools(self, *, run_type: str | None = None) -> list[dict[str, Any]]:
-        return self._runtime.build_tools(run_type=run_type)
+    def build_tools(
+        self,
+        *,
+        run_type: str | None = None,
+        disabled_skill_ids: Collection[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._runtime.build_tools(
+            run_type=run_type, disabled_skill_ids=disabled_skill_ids
+        )
 
     def execute_tool(
         self,
@@ -48,15 +56,24 @@ class SkillRegistry:
         tool_name: str,
         arguments: dict[str, Any],
         context: dict[str, Any],
+        disabled_skill_ids: Collection[str] | None = None,
     ) -> dict[str, Any]:
         return self._runtime.execute_tool(
             tool_name=tool_name,
             arguments=arguments,
             context=context,
+            disabled_skill_ids=disabled_skill_ids,
         )
 
-    def build_prompt_supplement(self, *, run_type: str | None = None) -> str:
-        return self._runtime.build_prompt_supplement(run_type=run_type)
+    def build_prompt_supplement(
+        self,
+        *,
+        run_type: str | None = None,
+        disabled_skill_ids: Collection[str] | None = None,
+    ) -> str:
+        return self._runtime.build_prompt_supplement(
+            run_type=run_type, disabled_skill_ids=disabled_skill_ids
+        )
 
     def list_skill_info(self) -> list[dict[str, Any]]:
         return [

@@ -549,6 +549,10 @@ export interface TradingAccount {
   tg_notify_trade_enabled: boolean
   capital_seal_enabled: boolean
   capital_seal_amount: number
+  automation_context_window_tokens: number
+  automation_recent_message_limit: number
+  automation_enable_auto_compaction: boolean
+  automation_idle_summary_hours: number
   disabled_skill_ids: string[]
   created_at: string
   updated_at: string
@@ -581,6 +585,10 @@ export type TradingAccountPayload = Partial<
     | 'tg_notify_trade_enabled'
     | 'capital_seal_enabled'
     | 'capital_seal_amount'
+    | 'automation_context_window_tokens'
+    | 'automation_recent_message_limit'
+    | 'automation_enable_auto_compaction'
+    | 'automation_idle_summary_hours'
   >
 > & { mx_api_key?: string | null }
 

@@ -136,6 +136,10 @@ class TradingAccountUpdate(BaseModel):
     tg_notify_trade_enabled: bool | None = None
     capital_seal_enabled: bool | None = None
     capital_seal_amount: float | None = Field(default=None, ge=0)
+    automation_context_window_tokens: int | None = Field(default=None, ge=4096)
+    automation_recent_message_limit: int | None = Field(default=None, ge=4, le=200)
+    automation_enable_auto_compaction: bool | None = None
+    automation_idle_summary_hours: int | None = Field(default=None, ge=1, le=168)
 
     @model_validator(mode="before")
     @classmethod

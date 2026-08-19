@@ -345,6 +345,55 @@
                   </div>
                 </section>
 
+                <!-- 自动化上下文 -->
+                <section class="account-section">
+                  <header class="account-section__header">
+                    <h3 class="account-section__title">自动化上下文</h3>
+                    <p class="account-section__desc">控制该账户自动化会话的历史记忆与压缩行为</p>
+                  </header>
+
+                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <UiField label="最大上下文" help="自动化会话上下文窗口大小；后端按 85% 触发压缩，默认 128000。">
+                      <input
+                        v-model.number="draft.automation_context_window_tokens"
+                        type="number"
+                        min="4096"
+                        step="1024"
+                        class="field-input"
+                      />
+                    </UiField>
+                    <UiField label="最近消息条数" help="保留给大模型参考的最近消息数，超限触发压缩，默认 24。">
+                      <input
+                        v-model.number="draft.automation_recent_message_limit"
+                        type="number"
+                        min="4"
+                        max="200"
+                        class="field-input"
+                      />
+                    </UiField>
+                    <UiField label="空闲摘要小时" help="会话空闲超过该小时数后触发压缩，默认 12。">
+                      <input
+                        v-model.number="draft.automation_idle_summary_hours"
+                        type="number"
+                        min="1"
+                        max="168"
+                        class="field-input"
+                      />
+                    </UiField>
+                  </div>
+
+                  <div class="account-card mt-4">
+                    <div class="account-card__row">
+                      <div class="min-w-0">
+                        <p class="account-card__title">自动压缩</p>
+                        <p class="account-card__hint">上下文超过阈值时自动生成历史策略摘要。
+                        </p>
+                      </div>
+                      <UiToggle v-model="draft.automation_enable_auto_compaction" />
+                    </div>
+                  </div>
+                </section>
+
                 <!-- 风控与通知 -->
                 <section class="account-section account-section--last">
                   <header class="account-section__header">
@@ -363,7 +412,7 @@
                       </div>
                       <div v-if="draft.capital_seal_enabled" class="account-card__body">
                         <UiField label="封印金额（元）">
-                          <input v-model.number="draft.capital_seal_amount" type="number" min="0" step="1000" class="field-input max-w-xs" />
+                          <input v-model.number="draft.capital_seal_amount" type="number" min="0" step="0.01" class="field-input max-w-xs" />
                         </UiField>
                       </div>
                     </div>
@@ -537,6 +586,10 @@ interface AccountDraft {
   tg_notify_trade_enabled: boolean
   capital_seal_enabled: boolean
   capital_seal_amount: number
+  automation_context_window_tokens: number
+  automation_recent_message_limit: number
+  automation_enable_auto_compaction: boolean
+  automation_idle_summary_hours: number
 }
 
 const draft = reactive<AccountDraft>({
@@ -565,6 +618,10 @@ const draft = reactive<AccountDraft>({
   tg_notify_trade_enabled: false,
   capital_seal_enabled: false,
   capital_seal_amount: 0,
+  automation_context_window_tokens: 128000,
+  automation_recent_message_limit: 24,
+  automation_enable_auto_compaction: true,
+  automation_idle_summary_hours: 12,
 })
 
 onMounted(async () => {
@@ -632,6 +689,10 @@ function resetDraft(account: TradingAccount | null) {
     draft.tg_notify_trade_enabled = source.tg_notify_trade_enabled
     draft.capital_seal_enabled = source.capital_seal_enabled
     draft.capital_seal_amount = source.capital_seal_amount
+    draft.automation_context_window_tokens = source.automation_context_window_tokens
+    draft.automation_recent_message_limit = source.automation_recent_message_limit
+    draft.automation_enable_auto_compaction = source.automation_enable_auto_compaction
+    draft.automation_idle_summary_hours = source.automation_idle_summary_hours
     return
   }
 
@@ -660,6 +721,10 @@ function resetDraft(account: TradingAccount | null) {
   draft.tg_notify_trade_enabled = false
   draft.capital_seal_enabled = false
   draft.capital_seal_amount = 0
+  draft.automation_context_window_tokens = 128000
+  draft.automation_recent_message_limit = 24
+  draft.automation_enable_auto_compaction = true
+  draft.automation_idle_summary_hours = 12
 }
 
 function startCreate() {
@@ -715,6 +780,10 @@ function buildPayload(): TradingAccountPayload {
     tg_notify_trade_enabled: draft.tg_notify_trade_enabled,
     capital_seal_enabled: draft.capital_seal_enabled,
     capital_seal_amount: draft.capital_seal_amount,
+    automation_context_window_tokens: draft.automation_context_window_tokens,
+    automation_recent_message_limit: draft.automation_recent_message_limit,
+    automation_enable_auto_compaction: draft.automation_enable_auto_compaction,
+    automation_idle_summary_hours: draft.automation_idle_summary_hours,
   }
 }
 

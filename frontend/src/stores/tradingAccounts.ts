@@ -191,7 +191,7 @@ export const useTradingAccountsStore = defineStore('tradingAccounts', () => {
   }
 
   async function refreshGlobalOverview(forceRefresh = false) {
-    globalOverview.value = await api.getGlobalOverview()
+    globalOverview.value = await api.getGlobalOverview(forceRefresh)
     return globalOverview.value
   }
 

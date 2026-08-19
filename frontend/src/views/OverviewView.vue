@@ -80,6 +80,46 @@
       <p v-if="globalOverview.errors.length > 0" class="mt-2 text-footnote text-danger-text">
         部分账户数据获取失败：{{ globalOverview.errors.map((item) => item.account_name).join('、') }}
       </p>
+
+      <!-- 全账户运行活动聚合 -->
+      <div v-if="globalOverview.runtime" class="mt-4 border-t border-separator pt-4">
+        <h3 class="mb-3 text-footnote font-semibold uppercase tracking-wide text-label-tertiary">
+          全账户运行活动
+        </h3>
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div
+            v-for="section in globalRuntimeSections"
+            :key="section.title"
+            class="rounded-[12px] border border-separator bg-fill/50 p-3.5"
+          >
+            <p class="m-0 text-footnote font-semibold text-label">{{ section.title }}</p>
+            <div class="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-2">
+              <div>
+                <p class="m-0 text-[11px] font-medium text-label-quaternary">AI分析</p>
+                <p class="m-0 mt-0.5 text-callout font-semibold tabular-nums text-label">{{ section.stats.analysis_count }} 次</p>
+              </div>
+              <div>
+                <p class="m-0 text-[11px] font-medium text-label-quaternary">交易执行</p>
+                <p class="m-0 mt-0.5 text-callout font-semibold tabular-nums text-label">{{ section.stats.trades }} 次</p>
+              </div>
+              <div>
+                <p class="m-0 text-[11px] font-medium text-label-quaternary">接口调用</p>
+                <p class="m-0 mt-0.5 text-callout font-semibold tabular-nums text-label">{{ section.stats.api_calls }} 次</p>
+              </div>
+              <div>
+                <p class="m-0 text-[11px] font-medium text-label-quaternary">成功率</p>
+                <p class="m-0 mt-0.5 text-callout font-semibold tabular-nums" :class="profitClass(section.stats.success_rate)">{{ section.stats.success_rate }}%</p>
+              </div>
+            </div>
+            <div class="mt-2.5 flex items-center gap-2 border-t border-separator pt-2 text-caption text-label-tertiary">
+              <span>Tokens</span>
+              <span class="tabular-nums">输入 {{ section.stats.input_tokens }}</span>
+              <span class="tabular-nums">输出 {{ section.stats.output_tokens }}</span>
+              <span class="tabular-nums font-semibold text-label-secondary">总量 {{ section.stats.total_tokens }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Stat cards -->
@@ -485,6 +525,18 @@ const accountRefreshing = vueComputed(() => {
 const canManualRefreshAccount = ref(true)
 const accountRefreshCooldownText = ref('')
 const globalOverview = vueComputed(() => store.globalOverview)
+
+const globalRuntimeSections = computed(() => {
+  const runtime = globalOverview.value?.runtime
+  if (!runtime) {
+    return []
+  }
+  return [
+    { title: '今日', stats: runtime.today },
+    { title: '近3个交易日', stats: runtime.recent_3_days },
+    { title: '近7个交易日', stats: runtime.recent_7_days },
+  ]
+})
 
 const emptyOverview = {
   open_date: null,

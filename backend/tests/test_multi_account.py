@@ -1194,3 +1194,46 @@ def test_disabled_account_due_schedule_advances_next_run(monkeypatch, tmp_path) 
         assert schedule.lease_until is None
         assert schedule.next_run_at is not None
     teardown_test_database()
+
+
+def test_global_overview_aggregates_runtime_across_accounts(monkeypatch, tmp_path) -> None:
+    """P2 补充：全账户汇总应包含跨账户的运行时活动聚合（分析/交易/成功率/tokens）。"""
+    from datetime import datetime, timezone
+
+    reset_test_database(monkeypatch, tmp_path)
+    with session_scope() as db:
+        account_a = create_account(db, slug="acct-a")
+        account_b = create_account(db, slug="acct-b")
+        db.commit()
+        a_id, b_id = account_a.id, account_b.id
+
+        now = datetime.now(timezone.utc)
+        for account_id in (a_id, b_id):
+            create_run(
+                db,
+                account_id,
+                status="completed",
+                started_at=now - timedelta(hours=1),
+                finished_at=now - timedelta(hours=1),
+                llm_response_payload={
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+                },
+                skill_payloads={"tool_calls": []},
+            )
+        db.commit()
+
+    from app.services.aniu_service import aniu_service
+
+    with session_scope() as db:
+        result = aniu_service.get_global_overview(force_refresh=True)
+
+    assert "runtime" in result
+    runtime = result["runtime"]
+    # 两个账户各 1 次分析 → 聚合为 2
+    assert runtime["today"]["analysis_count"] == 2
+    assert runtime["recent_3_days"]["analysis_count"] == 2
+    assert runtime["recent_7_days"]["analysis_count"] == 2
+    assert runtime["today"]["success_rate"] == 100.0
+    # tokens 聚合（格式化字符串）
+    assert runtime["today"]["total_tokens"] == "300"
+    teardown_test_database()

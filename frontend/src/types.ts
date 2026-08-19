@@ -218,6 +218,18 @@ export interface AccountOverview {
   orders: OrderOverview[]
   trade_summaries: TradeSummary[]
   errors: string[]
+  capital_seal?: {
+    applied: boolean
+    enabled: boolean
+    seal_amount: number
+    real_total_assets: number | null
+    real_cash_balance: number | null
+    real_initial_capital: number | null
+    real_market_value: number | null
+    virtual_total_assets: number | null
+    virtual_cash_balance: number | null
+    seal_breached: boolean
+  } | null
 }
 
 export interface ChatToolCall {

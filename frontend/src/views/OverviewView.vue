@@ -256,6 +256,22 @@
       />
     </div>
 
+    <!-- 资金封印提示 -->
+    <div
+      v-if="account?.capital_seal?.applied"
+      class="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-[14px] border border-warning/25 bg-warning-soft px-4 py-3 text-footnote text-warning-text"
+      role="status"
+    >
+      <span class="inline-flex items-center gap-1.5 font-semibold">
+        <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" /></svg>
+        已启用资金封印
+      </span>
+      <span>封印金额 <strong class="tabular-nums">{{ formatMoney(account.capital_seal.seal_amount) }}</strong></span>
+      <span>可操作总资产 <strong class="tabular-nums">{{ formatMoney(account.capital_seal.virtual_total_assets) }}</strong>（真实 {{ formatMoney(account.capital_seal.real_total_assets) }}）</span>
+      <span>可操作现金 <strong class="tabular-nums">{{ formatMoney(account.capital_seal.virtual_cash_balance) }}</strong>（真实 {{ formatMoney(account.capital_seal.real_cash_balance) }}）</span>
+      <span v-if="account.capital_seal.seal_breached" class="font-semibold text-danger-text">⚠ 封印金额已超过真实现金</span>
+    </div>
+
     <!-- Positions -->
     <UiPanel title="持仓情况" kicker="Positions">
       <template v-if="displayPositions.length">
@@ -664,6 +680,7 @@ const emptyOverview = {
   orders: [],
   trade_summaries: [],
   errors: [],
+  capital_seal: null,
 }
 
 const emptyRuntimeOverview = {

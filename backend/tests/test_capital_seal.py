@@ -114,6 +114,47 @@ def test_mx_get_balance_handler_seals_before_model() -> None:
     assert "资金封印" in result["summary"]
 
 
+def test_mx_get_balance_hides_real_amounts_from_agent() -> None:
+    """给 AI 的工具结果只暴露虚拟口径，不泄露真实金额（避免决策用整体金额）。"""
+    class _Client:
+        def get_balance(self) -> dict:
+            return _raw_balance()
+
+    result = mx_execution_service._handle_get_balance(
+        client=_Client(),
+        app_settings=SimpleNamespace(
+            capital_seal_enabled=True, capital_seal_amount=900_000
+        ),
+        arguments={},
+    )
+    meta = result["result"].get("_aniu_capital_seal") or {}
+    # 主字段是虚拟口径
+    assert result["result"]["data"]["totalAsset"] == 100_000
+    # 元信息不暴露真实金额
+    for key in (
+        "real_total_assets",
+        "real_cash_balance",
+        "real_initial_capital",
+        "real_market_value",
+    ):
+        assert key not in meta
+    # 仍保留虚拟口径与封印金额供 AI 参考
+    assert meta["applied"] is True
+    assert meta["seal_amount"] == 900_000
+    assert meta["virtual_total_assets"] == 100_000
+
+
+def test_overview_keeps_real_amounts_for_ui() -> None:
+    """总览页的"真实 vs 虚拟"对比仍保留真实金额（独立路径，不受工具清理影响）。"""
+    sealed = apply_seal_to_balance_payload(
+        _raw_balance(), seal_amount=900_000, enabled=True
+    )
+    meta = sealed["_aniu_capital_seal"]
+    assert meta["real_total_assets"] == 1_000_000
+    assert meta["real_cash_balance"] == 1_000_000
+    assert meta["virtual_total_assets"] == 100_000
+
+
 def test_buy_rejected_when_exceeds_virtual_cash() -> None:
     class _Client:
         def get_balance(self) -> dict:

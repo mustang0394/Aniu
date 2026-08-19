@@ -657,7 +657,10 @@ function marketLabel(markets: string[]): string {
 }
 
 function formatAmount(value: number): string {
-  return Number(value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+  return Number(value ?? 0).toLocaleString('zh-CN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })
 }
 
 function resetDraft(account: TradingAccount | null) {

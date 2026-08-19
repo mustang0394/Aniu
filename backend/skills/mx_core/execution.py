@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from skills.mx_core.client import MXClient
 from skills.mx_core.capital_seal import (
+    _SEAL_META_KEY,
     apply_seal_to_balance_payload,
     check_buy_against_virtual_cash,
     estimate_buy_notional,
@@ -251,7 +252,19 @@ class MXExecutionService:
         )
         summary = "已查询账户资金。"
         if enabled and isinstance(projected, dict):
-            meta = projected.get("_aniu_capital_seal") or {}
+            # AI 决策只使用封印后的可操作口径：隐藏真实金额字段，
+            # 避免模型被 real_total_assets / real_cash_balance 等真实值干扰
+            # 而改用未封印的整体资金做仓位或资金判断。总览页的"真实 vs 虚拟"
+            # 对比由 get_account_overview 独立路径维护，不受此处清理影响。
+            meta = projected.get(_SEAL_META_KEY)
+            if isinstance(meta, dict):
+                for key in (
+                    "real_total_assets",
+                    "real_cash_balance",
+                    "real_initial_capital",
+                    "real_market_value",
+                ):
+                    meta.pop(key, None)
             virtual_total = meta.get("virtual_total_assets")
             virtual_cash = meta.get("virtual_cash_balance")
             parts = [f"已按资金封印（{seal:.2f} 元）投影为可操作口径"]
@@ -389,6 +402,7 @@ class MXExecutionService:
 
         position_pct = self._compute_position_pct(
             client=client,
+            app_settings=app_settings,
             action=action,
             symbol=symbol,
             quantity=quantity,
@@ -423,6 +437,7 @@ class MXExecutionService:
         self,
         *,
         client: MXClient,
+        app_settings: Any = None,
         action: str,
         symbol: str,
         quantity: int,
@@ -432,7 +447,8 @@ class MXExecutionService:
         """计算本次操作对应的仓位比例（百分比，0-100）。
 
         - BUY：买入金额 / 账户总资产（按委托前口径计算，避免买入后
-          总资产膨胀导致比例偏低）。
+          总资产膨胀导致比例偏低）。启用资金封印时，总资产按封印后的
+          虚拟可操作口径计算，与买入额度校验保持一致。
         - SELL：卖出数量 / 该股票委托前持仓数量。
 
         市价买入且未提供参考价格时金额不可靠，返回 None；任何查询或
@@ -447,7 +463,16 @@ class MXExecutionService:
                 )
                 if not notional or notional <= 0:
                     return None
-                total_assets = _extract_balance_total_assets(client.get_balance())
+                balance_payload = client.get_balance()
+                # 资金封印：按封印后的虚拟总资产计算仓位占比，
+                # 与买入额度校验（check_buy_against_virtual_cash）口径一致。
+                enabled, seal = get_seal_config(app_settings)
+                projected = apply_seal_to_balance_payload(
+                    balance_payload if isinstance(balance_payload, dict) else None,
+                    seal_amount=seal,
+                    enabled=enabled,
+                )
+                total_assets = _extract_balance_total_assets(projected)
                 if total_assets and total_assets > 0:
                     return round(min(100.0, notional / total_assets * 100), 2)
                 return None

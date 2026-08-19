@@ -51,9 +51,10 @@ def _row(symbol: str, count: int) -> dict:
 
 
 def _compute(client, *, action="BUY", symbol="600519", quantity=100,
-             price=None, price_type="LIMIT"):
+             price=None, price_type="LIMIT", app_settings=None):
     return mx_execution_service._compute_position_pct(
         client=client,
+        app_settings=app_settings,
         action=action,
         symbol=symbol,
         quantity=quantity,
@@ -148,3 +149,50 @@ def test_extract_position_quantity_variants() -> None:
         {"data": {"data": [_row("600519", 1000)]}}, "000001"
     ) is None
     assert _extract_position_quantity(None, "600519") is None
+
+
+def test_buy_position_pct_uses_virtual_assets_when_seal_enabled() -> None:
+    """资金封印启用时，买入仓位占比按虚拟总资产（真实 − 封印）计算。"""
+    from types import SimpleNamespace
+
+    # 真实总资产 100 万，封印 90 万 → 虚拟总资产 10 万。
+    client = _FakeClient(
+        balance={
+            "data": {
+                "totalAsset": 1_000_000,
+                "balanceActual": 950_000,
+                "availBalance": 950_000,
+                "marketValue": 50_000,
+                "initMoney": 1_000_000,
+            }
+        }
+    )
+    app_settings = SimpleNamespace(
+        capital_seal_enabled=True, capital_seal_amount=900_000
+    )
+    # 买 5 万（限价 500 元 × 100 股）→ 占虚拟总资产 50%。
+    pct = _compute(client, quantity=100, price=500.0, app_settings=app_settings)
+    assert pct == 50.0
+
+
+def test_buy_position_pct_uses_real_assets_without_seal() -> None:
+    """未启用封印时，买入仓位占比按真实总资产计算。"""
+    from types import SimpleNamespace
+
+    client = _FakeClient(
+        balance={
+            "data": {
+                "totalAsset": 1_000_000,
+                "balanceActual": 1_000_000,
+                "availBalance": 1_000_000,
+                "marketValue": 0,
+                "initMoney": 1_000_000,
+            }
+        }
+    )
+    app_settings = SimpleNamespace(
+        capital_seal_enabled=False, capital_seal_amount=0
+    )
+    # 买 5 万 → 占真实总资产 5%。
+    pct = _compute(client, quantity=100, price=500.0, app_settings=app_settings)
+    assert pct == 5.0

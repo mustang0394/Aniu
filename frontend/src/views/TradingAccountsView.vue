@@ -93,10 +93,34 @@
         </div>
 
         <div class="mt-4 flex flex-wrap items-center gap-2 border-t border-separator pt-4">
-          <UiButton variant="tinted" size="sm" :disabled="account.archived" @click="openEdit(account)">编辑</UiButton>
-          <UiButton variant="tinted" size="sm" :disabled="account.archived" @click="openSkills(account)">Skills</UiButton>
-          <UiButton variant="tinted" size="sm" :disabled="account.archived" @click="testMx(account)">测试妙想</UiButton>
-          <UiButton variant="tinted" size="sm" :disabled="account.archived" @click="testLlm(account)">测试 LLM</UiButton>
+          <UiButton variant="primary" size="sm" :disabled="account.archived" @click="openEdit(account)">
+            <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
+            编辑
+          </UiButton>
+          <UiButton variant="ghost" size="sm" :disabled="account.archived" @click="openSkills(account)">
+            <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></svg>
+            Skills
+          </UiButton>
+          <UiButton
+            variant="tinted"
+            size="sm"
+            :disabled="account.archived || testingMxId === account.id"
+            :loading="testingMxId === account.id"
+            @click="testMx(account)"
+          >
+            <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 20V4" /></svg>
+            测试妙想
+          </UiButton>
+          <UiButton
+            variant="tinted"
+            size="sm"
+            :disabled="account.archived || testingLlmId === account.id"
+            :loading="testingLlmId === account.id"
+            @click="testLlm(account)"
+          >
+            <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M15 2v4M15 18v4M2 15h4M18 15h4M2 9h4M18 9h4M9 2v4M9 18v4" /></svg>
+            测试 LLM
+          </UiButton>
           <span class="flex-1" />
           <UiButton
             v-if="!account.archived && account.slug !== 'default'"
@@ -231,6 +255,18 @@
                       <UiField label="请求重试次数" help="单次调用失败后的额外重试，默认 3。">
                         <input v-model.number="draft.llm_max_retries" type="number" min="0" max="10" class="field-input" />
                       </UiField>
+                    </div>
+
+                    <div class="account-card mt-4">
+                      <div class="account-card__row">
+                        <div class="min-w-0">
+                          <p class="account-card__title">回传思考内容</p>
+                          <p class="account-card__hint">
+                            将推理模型返回的 reasoning_content 在下一轮请求中回传，避免 DeepSeek-v4 系列模型报 400。
+                          </p>
+                        </div>
+                        <UiToggle v-model="draft.llm_enable_reasoning_content_echo" />
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -459,6 +495,8 @@ const error = ref('')
 const editorError = ref('')
 const accountDraft = ref<TradingAccount | null>(null)
 const testResults = reactive<Record<number, AccountMxTestResult | AccountLlmTestResult>>({})
+const testingMxId = ref<number | null>(null)
+const testingLlmId = ref<number | null>(null)
 
 const showSkills = ref(false)
 const skillsAccount = ref<TradingAccount | null>(null)
@@ -728,19 +766,25 @@ async function restore(account: TradingAccount) {
 
 async function testMx(account: TradingAccount) {
   testResults[account.id] = { ok: false, message: '测试中…' }
+  testingMxId.value = account.id
   try {
     testResults[account.id] = await api.testAccountMx(account.id)
   } catch (exception) {
     testResults[account.id] = { ok: false, message: (exception as Error).message }
+  } finally {
+    testingMxId.value = null
   }
 }
 
 async function testLlm(account: TradingAccount) {
   testResults[account.id] = { ok: false, message: '测试中…' }
+  testingLlmId.value = account.id
   try {
     testResults[account.id] = await api.testAccountLlm(account.id)
   } catch (exception) {
     testResults[account.id] = { ok: false, message: (exception as Error).message }
+  } finally {
+    testingLlmId.value = null
   }
 }
 

@@ -3,7 +3,7 @@
     <UiPageHeader title="账户总览" kicker="Overview" description="模拟账户资产、持仓与委托快照">
       <div class="flex flex-wrap items-center gap-2">
         <select
-          v-if="store.hasMultipleAccounts"
+          v-if="store.activeAccounts.length > 0"
           :value="store.selectedAccountId ?? ''"
           class="h-9 w-auto cursor-pointer rounded-[10px] border border-separator-strong bg-card-solid/80 px-3 text-body text-label outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent-ring"
           @change="handleAccountSwitch"
@@ -25,21 +25,22 @@
       </div>
     </UiPageHeader>
 
-    <!-- 账户对比分析（多账户时展示） -->
+    <!-- 账户对比分析 -->
     <UiPanel
-      v-if="store.hasMultipleAccounts && accountComparison.length"
+      v-if="accountComparison.length"
       title="账户对比"
       kicker="Account Comparison"
     >
       <template #actions>
-        <span class="text-footnote text-label-tertiary">点击任意账户行可切换查看明细</span>
+        <span class="text-footnote text-label-tertiary">点击任意账户行可切换下方明细</span>
       </template>
       <div class="overflow-x-auto">
-        <table class="w-full min-w-[920px] border-collapse text-left text-body">
+        <table class="w-full min-w-[1080px] border-collapse text-left text-body">
           <thead>
             <tr class="border-b border-separator text-caption font-semibold uppercase tracking-wide text-label-tertiary">
               <th class="px-3 py-3 font-semibold">账户</th>
               <th class="px-3 py-3 text-right font-semibold">总资产</th>
+              <th class="px-3 py-3 text-right font-semibold">初始资金</th>
               <th class="px-3 py-3 text-right font-semibold">今日盈亏</th>
               <th class="px-3 py-3 text-right font-semibold">累计盈亏</th>
               <th class="px-3 py-3 text-right font-semibold">持仓数</th>
@@ -70,6 +71,9 @@
               <td class="px-3 py-3.5 text-right tabular-nums font-medium text-label">
                 {{ formatMoney(item.totalAssets) }}
               </td>
+              <td class="px-3 py-3.5 text-right tabular-nums text-label-secondary">
+                {{ formatMoney(item.initialCapital) }}
+              </td>
               <td class="px-3 py-3.5 text-right">
                 <div class="flex flex-col items-end gap-0.5">
                   <span class="tabular-nums font-semibold" :class="profitClass(item.dailyProfit)">{{ formatSignedMoney(item.dailyProfit) }}</span>
@@ -98,8 +102,8 @@
       </div>
     </UiPanel>
 
-    <!-- 全局聚合（多账户时展示） -->
-    <div v-if="store.hasMultipleAccounts && globalOverview" class="rounded-2xl border border-separator bg-card p-4 shadow-sm">
+    <!-- 全账户汇总 -->
+    <div v-if="globalOverview" class="rounded-2xl border border-separator bg-card p-4 shadow-sm">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 class="text-callout font-semibold text-label">全账户汇总</h2>
         <div class="flex flex-wrap items-center gap-2">
@@ -619,6 +623,7 @@ const accountComparison = computed(() => {
       accountName: item.account_name,
       status: item.status,
       totalAssets,
+      initialCapital,
       dailyProfit: o.daily_profit ?? null,
       dailyReturnRatio: o.daily_return_ratio ?? null,
       totalProfit,
@@ -833,10 +838,8 @@ async function refreshSelected(forceRefresh = false) {
   const tasks: Promise<unknown>[] = [
     store.refreshAccountOverview(accountId, forceRefresh),
     store.refreshRuntimeOverview(accountId),
+    store.refreshGlobalOverview(forceRefresh).catch(() => null),
   ]
-  if (store.hasMultipleAccounts) {
-    tasks.push(store.refreshGlobalOverview(forceRefresh).catch(() => null))
-  }
   const results = await Promise.allSettled(tasks)
   const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
   if (failed) {
@@ -862,13 +865,6 @@ onMounted(async () => {
     }
   }
   await refreshSelected()
-  if (store.hasMultipleAccounts) {
-    try {
-      await store.refreshGlobalOverview()
-    } catch {
-      // 聚合失败不阻塞页面
-    }
-  }
   cooldownTimer = window.setInterval(() => {
     canManualRefreshAccount.value = true
   }, 60 * 1000)

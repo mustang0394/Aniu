@@ -79,7 +79,6 @@
                   v-model.number="settings.automation_context_window_tokens"
                   type="number"
                   min="4096"
-                  step="1024"
                   class="field-input"
                 />
               </UiField>

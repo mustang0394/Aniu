@@ -190,6 +190,14 @@ export const useTradingAccountsStore = defineStore('tradingAccounts', () => {
     delete runDetailsMap[accountId]
   }
 
+  /** 删除运行记录后调用：清除该 run 的详情缓存，防止 rowid 复用时命中旧数据。 */
+  function evictRunDetail(accountId: number, runId: number) {
+    const map = runDetailsMap[accountId]
+    if (map) {
+      delete map[runId]
+    }
+  }
+
   async function refreshGlobalOverview(forceRefresh = false) {
     globalOverview.value = await api.getGlobalOverview(forceRefresh)
     return globalOverview.value
@@ -230,6 +238,7 @@ export const useTradingAccountsStore = defineStore('tradingAccounts', () => {
     loadRuns,
     loadRunDetail,
     clearAccountCache,
+    evictRunDetail,
     refreshGlobalOverview,
     reset,
   }

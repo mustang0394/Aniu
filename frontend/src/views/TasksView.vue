@@ -349,6 +349,8 @@ const {
   selectRun,
   refreshRunDetail,
   ensureRawToolPreview,
+  evictRunDetail,
+  clearRunDetailCache,
   loadHistoryRuns,
 } = useAnalysisRuns({
   listRunsPage: (options) =>
@@ -386,6 +388,8 @@ function handleAccountSwitch(event: Event) {
     if (accountId !== null) {
       void store.loadSchedules(accountId).catch(() => {})
     }
+    // runCache 无账户维度，切换账户必须清空，防止跨账户同 id 命中旧缓存
+    clearRunDetailCache()
     loadInitialRuns({ syncSelection: !liveFocused.value })
   }
 }
@@ -547,6 +551,9 @@ async function handleDeleteRun(runId: number) {
   if (selectedRun.value?.id === runId) {
     liveFocused.value = false
   }
+  // 清除该 run 的前端双层缓存，防止 SQLite rowid 复用后新 run 命中旧缓存
+  evictRunDetail(runId)
+  store.evictRunDetail(accountId, runId)
   await Promise.all([
     loadInitialRuns({ syncSelection: true }),
     selectedDate.value ? loadHistoryRuns() : Promise.resolve(),

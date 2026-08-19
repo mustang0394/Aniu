@@ -388,6 +388,26 @@ export function useAnalysisRuns(options: {
     return mapped
   }
 
+  /** 删除运行记录后调用：清除该 run 的详情缓存与预览请求，防止 rowid 复用时命中旧数据。 */
+  function evictRunDetail(runId: number) {
+    runCache.delete(runId)
+    for (const key of [...rawToolPreviewRequests.keys()]) {
+      if (key.startsWith(`${runId}:`)) {
+        rawToolPreviewRequests.delete(key)
+      }
+    }
+    if (selectedRun.value?.id === runId) {
+      selectedRun.value = null
+    }
+  }
+
+  /** 切换交易账户后调用：runCache 无账户维度，必须整体清空防止跨账户串数据。 */
+  function clearRunDetailCache() {
+    runCache.clear()
+    rawToolPreviewRequests.clear()
+    markdownCache.clear()
+  }
+
   async function refreshRunDetail(runId: number) {
     const detail = await ensureRunDetail(runId, true)
     if (selectedRun.value?.id === runId) {
@@ -596,6 +616,8 @@ export function useAnalysisRuns(options: {
     selectRun,
     refreshRunDetail,
     ensureRawToolPreview,
+    evictRunDetail,
+    clearRunDetailCache,
     loadHistoryRuns,
   }
 }

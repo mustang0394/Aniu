@@ -544,6 +544,8 @@ export interface TradingAccount {
   max_actions: number
   trade_enabled: boolean
   allowed_markets: MarketKey[]
+  tg_bot_token: string | null
+  tg_chat_id: string | null
   tg_notify_trade_enabled: boolean
   capital_seal_enabled: boolean
   capital_seal_amount: number
@@ -574,6 +576,8 @@ export type TradingAccountPayload = Partial<
     | 'max_actions'
     | 'trade_enabled'
     | 'allowed_markets'
+    | 'tg_bot_token'
+    | 'tg_chat_id'
     | 'tg_notify_trade_enabled'
     | 'capital_seal_enabled'
     | 'capital_seal_amount'
@@ -620,6 +624,7 @@ export interface GlobalOverview {
     total_return_ratio: number | null
     daily_return_ratio: number | null
   }
+  runtime: RuntimeOverview
   errors: Array<{ account_id: number; account_name: string; error: string }>
 }
 

@@ -1589,16 +1589,64 @@ class AniuService:
         )
         return overview
 
+    def _build_runtime_aggregate(
+        self, db: Session, account_ids: list[int]
+    ) -> dict[str, Any]:
+        """跨账户运行时活动聚合（今日/近3日/近7日的分析、交易、成功率、tokens）。"""
+        empty = {
+            "last_run": self._build_runtime_last_run(None),
+            "today": self._build_runtime_summary_section([]),
+            "recent_3_days": self._build_runtime_summary_section([]),
+            "recent_7_days": self._build_runtime_summary_section([]),
+        }
+        if not account_ids:
+            return empty
+
+        runs = db.scalars(
+            select(StrategyRun)
+            .where(StrategyRun.trading_account_id.in_(account_ids))
+            .order_by(StrategyRun.started_at.desc())
+            .limit(1000)
+        ).all()
+        if not runs:
+            return empty
+
+        for run in runs:
+            self._hydrate_run_datetimes(run, include_display_fields=False)
+
+        latest_run = runs[0]
+        return {
+            "last_run": self._build_runtime_last_run(latest_run),
+            "today": self._build_runtime_summary_section(
+                [
+                    run
+                    for run in runs
+                    if self._is_within_days(run.started_at, 1, same_day_only=True)
+                ]
+            ),
+            "recent_3_days": self._build_runtime_summary_section(
+                [run for run in runs if self._is_within_days(run.started_at, 3)]
+            ),
+            "recent_7_days": self._build_runtime_summary_section(
+                [run for run in runs if self._is_within_days(run.started_at, 7)]
+            ),
+        }
+
     def get_global_overview(
         self,
         *,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
-        """全局聚合总览（§10.3）：各账户独立刷新，金额求和，收益率加权。"""
+        """全局聚合总览（§10.3）：各账户独立刷新，金额求和，收益率加权。
+
+        除资金指标外，同时聚合跨账户的运行时活动统计（分析/交易/成功率/tokens）。
+        """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         with session_scope() as db:
             accounts = account_service.list_accounts(db, include_archived=False)
+            account_ids = [int(account.id) for account in accounts]
+            runtime = self._build_runtime_aggregate(db, account_ids)
 
         accounts_payload: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
@@ -1712,6 +1760,7 @@ class AniuService:
                 "total_return_ratio": total_return_ratio,
                 "daily_return_ratio": daily_return_ratio,
             },
+            "runtime": runtime,
             "errors": errors,
         }
 

@@ -390,8 +390,13 @@ export const api = {
       { timeoutMs: 60000 },
     )
   },
-  getGlobalOverview() {
-    return request<GlobalOverview>(`${API_PREFIX}/overview`, { timeoutMs: 120000 })
+  getGlobalOverview(forceRefresh = false) {
+    const params = new URLSearchParams()
+    if (forceRefresh) {
+      params.set('force_refresh', 'true')
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+    return request<GlobalOverview>(`${API_PREFIX}/overview${suffix}`, { timeoutMs: 120000 })
   },
   // ── 账户管理（多妙想 Key） ───────────────────────────
   listAccounts(includeArchived = false) {

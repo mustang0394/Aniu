@@ -261,14 +261,14 @@
                       />
                     </UiField>
 
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                      <UiField label="市场查询" help="预取阶段的市场快照查询词。">
+                    <div class="grid grid-cols-1 gap-4">
+                      <UiField label="市场查询" help="预取阶段的市场快照查询词，会作为本轮实时行情数据快照的查询输入。">
                         <input v-model="draft.market_query" type="text" class="field-input" />
                       </UiField>
-                      <UiField label="资讯查询" help="预取阶段的资讯快照查询词。">
+                      <UiField label="资讯查询" help="预取阶段的资讯快照查询词，会作为本轮实时资讯数据快照的查询输入。">
                         <input v-model="draft.news_query" type="text" class="field-input" />
                       </UiField>
-                      <UiField label="选股查询" help="预取阶段的选股快照查询词。">
+                      <UiField label="选股查询" help="预取阶段的选股快照查询词，会作为本轮实时选股数据快照的查询输入。">
                         <input v-model="draft.screener_query" type="text" class="field-input" />
                       </UiField>
                     </div>
@@ -336,9 +336,17 @@
                       <div class="account-card__row">
                         <div class="min-w-0">
                           <p class="account-card__title">Telegram 交易通知</p>
-                          <p class="account-card__hint">交易执行后推送通知（Token / Chat ID 在账户数据库中配置）。</p>
+                          <p class="account-card__hint">交易执行后通过 Telegram 推送通知，需配置 Bot Token 与 Chat ID。</p>
                         </div>
                         <UiToggle v-model="draft.tg_notify_trade_enabled" />
+                      </div>
+                      <div v-if="draft.tg_notify_trade_enabled" class="account-card__body space-y-4">
+                        <UiField label="Bot Token" help="从 @BotFather 获取的机器人令牌。">
+                          <input v-model="draft.tg_bot_token" type="password" autocomplete="off" class="field-input" placeholder="123456:ABC-DEF…" />
+                        </UiField>
+                        <UiField label="Chat ID" help="接收通知的会话 ID，支持群组或私人聊天。">
+                          <input v-model="draft.tg_chat_id" type="text" class="field-input" placeholder="-1001234567890" />
+                        </UiField>
                       </div>
                     </div>
                   </div>
@@ -486,6 +494,8 @@ interface AccountDraft {
   max_actions: number
   trade_enabled: boolean
   allowed_markets: string[]
+  tg_bot_token: string
+  tg_chat_id: string
   tg_notify_trade_enabled: boolean
   capital_seal_enabled: boolean
   capital_seal_amount: number
@@ -512,6 +522,8 @@ const draft = reactive<AccountDraft>({
   max_actions: 2,
   trade_enabled: true,
   allowed_markets: ['sh_main', 'sz_main'],
+  tg_bot_token: '',
+  tg_chat_id: '',
   tg_notify_trade_enabled: false,
   capital_seal_enabled: false,
   capital_seal_amount: 0,
@@ -577,6 +589,8 @@ function resetDraft(account: TradingAccount | null) {
     draft.max_actions = source.max_actions
     draft.trade_enabled = source.trade_enabled
     draft.allowed_markets = [...source.allowed_markets]
+    draft.tg_bot_token = source.tg_bot_token ?? ''
+    draft.tg_chat_id = source.tg_chat_id ?? ''
     draft.tg_notify_trade_enabled = source.tg_notify_trade_enabled
     draft.capital_seal_enabled = source.capital_seal_enabled
     draft.capital_seal_amount = source.capital_seal_amount
@@ -603,6 +617,8 @@ function resetDraft(account: TradingAccount | null) {
   draft.max_actions = 2
   draft.trade_enabled = true
   draft.allowed_markets = ['sh_main', 'sz_main']
+  draft.tg_bot_token = ''
+  draft.tg_chat_id = ''
   draft.tg_notify_trade_enabled = false
   draft.capital_seal_enabled = false
   draft.capital_seal_amount = 0
@@ -656,6 +672,8 @@ function buildPayload(): TradingAccountPayload {
     max_actions: Math.max(1, Math.min(20, draft.max_actions)),
     trade_enabled: draft.trade_enabled,
     allowed_markets: (draft.allowed_markets ?? ['sh_main', 'sz_main']) as TradingAccountPayload['allowed_markets'],
+    tg_bot_token: draft.tg_bot_token.trim() || null,
+    tg_chat_id: draft.tg_chat_id.trim() || null,
     tg_notify_trade_enabled: draft.tg_notify_trade_enabled,
     capital_seal_enabled: draft.capital_seal_enabled,
     capital_seal_amount: draft.capital_seal_amount,

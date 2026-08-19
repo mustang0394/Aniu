@@ -68,6 +68,8 @@ class TradingAccountBase(BaseModel):
         default_factory=lambda: list(DEFAULT_ALLOWED_MARKETS),
         min_length=1,
     )
+    tg_bot_token: str | None = Field(default=None, max_length=512)
+    tg_chat_id: str | None = Field(default=None, max_length=512)
     tg_notify_trade_enabled: bool = False
     capital_seal_enabled: bool = False
     capital_seal_amount: float = Field(default=0.0, ge=0)
@@ -129,6 +131,8 @@ class TradingAccountUpdate(BaseModel):
     max_actions: int | None = Field(default=None, ge=1, le=20)
     trade_enabled: bool | None = None
     allowed_markets: list[MarketKey] | None = None
+    tg_bot_token: str | None = Field(default=None, max_length=512)
+    tg_chat_id: str | None = Field(default=None, max_length=512)
     tg_notify_trade_enabled: bool | None = None
     capital_seal_enabled: bool | None = None
     capital_seal_amount: float | None = Field(default=None, ge=0)

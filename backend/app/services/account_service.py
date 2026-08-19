@@ -396,6 +396,8 @@ class AccountService:
             max_actions=int(account.max_actions or 2),
             trade_enabled=bool(account.trade_enabled),
             allowed_markets=list(_parse_markets(account.allowed_markets_json)),
+            tg_bot_token=account.tg_bot_token,
+            tg_chat_id=account.tg_chat_id,
             tg_notify_trade_enabled=bool(account.tg_notify_trade_enabled),
             capital_seal_enabled=bool(account.capital_seal_enabled),
             capital_seal_amount=float(account.capital_seal_amount or 0),

@@ -332,6 +332,11 @@ class ChatAttachment(Base):
     __tablename__ = "chat_attachments"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    trading_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trading_accounts.id"),
+        nullable=True,
+        index=True,
+    )
     filename: Mapped[str] = mapped_column(String(255))
     mime_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
     size: Mapped[int] = mapped_column(Integer, default=0)

@@ -86,6 +86,9 @@ def test_schedule_runs_share_single_automation_session(monkeypatch, tmp_path) ->
             settings.llm_base_url = "https://example.com/v1"
             settings.llm_api_key = "llm-key"
             settings.llm_model = "demo-model"
+            from tests.helpers import set_default_account_key
+
+            set_default_account_key(db)
             first = _prepare_schedule(db, name="盘前分析", run_type="analysis")
             second = _prepare_schedule(db, name="上午运行 1", run_type="trade")
             first_id = first.id
@@ -143,6 +146,9 @@ def test_manual_runs_share_automation_session_with_scheduled_runs(monkeypatch, t
             settings.llm_base_url = "https://example.com/v1"
             settings.llm_api_key = "llm-key"
             settings.llm_model = "demo-model"
+            from tests.helpers import set_default_account_key
+
+            set_default_account_key(db)
             schedule = _prepare_schedule(db, name="收盘分析", run_type="analysis")
             schedule_id = schedule.id
 
@@ -197,6 +203,9 @@ def test_scheduled_runs_can_read_prior_manual_history(monkeypatch, tmp_path) -> 
             settings.llm_base_url = "https://example.com/v1"
             settings.llm_api_key = "llm-key"
             settings.llm_model = "demo-model"
+            from tests.helpers import set_default_account_key
+
+            set_default_account_key(db)
             schedule = _prepare_schedule(db, name="收盘分析", run_type="analysis")
             schedule_id = schedule.id
 
@@ -230,6 +239,9 @@ def test_schedule_run_failure_persists_failed_assistant_message(monkeypatch, tmp
             settings.llm_base_url = "https://example.com/v1"
             settings.llm_api_key = "llm-key"
             settings.llm_model = "demo-model"
+            from tests.helpers import set_default_account_key
+
+            set_default_account_key(db)
             schedule = _prepare_schedule(db, name="午间复盘", run_type="analysis")
             schedule_id = schedule.id
 
@@ -268,8 +280,24 @@ def test_chat_session_list_excludes_automation_sessions(monkeypatch, tmp_path) -
         headers = {"Authorization": f"Bearer {response.json()['token']}"}
 
         with session_scope() as db:
-            db.add(ChatSession(title="Automation", kind="automation", slug="automation-default"))
-            db.add(ChatSession(title="User", kind="user"))
+            from app.services.account_service import account_service
+
+            _default = account_service.list_accounts(db, include_archived=False)[0]
+            db.add(
+                ChatSession(
+                    title="Automation",
+                    kind="automation",
+                    slug="automation-default",
+                    trading_account_id=_default.id,
+                )
+            )
+            db.add(
+                ChatSession(
+                    title="User",
+                    kind="user",
+                    trading_account_id=_default.id,
+                )
+            )
 
         result = client.get("/api/aniu/chat/sessions", headers=headers)
         assert result.status_code == 200
@@ -447,6 +475,9 @@ def test_schedule_run_emits_context_compacted_event(monkeypatch, tmp_path) -> No
             settings.llm_base_url = "https://example.com/v1"
             settings.llm_api_key = "llm-key"
             settings.llm_model = "demo-model"
+            from tests.helpers import set_default_account_key
+
+            set_default_account_key(db)
             from app.services.account_service import account_service
 
             account = account_service.list_accounts(db, include_archived=False)[0]

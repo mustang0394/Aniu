@@ -981,12 +981,19 @@ class LLMService:
             get_allowed_markets_from_settings(app_settings)
         )
         seal_prompt = build_capital_seal_prompt(app_settings)
+        analyst_prompt = str(
+            getattr(app_settings, "analyst_prompt", None) or ""
+        ).strip()
         prompt_parts = [
             str(base_prompt or "").strip(),
             str(supplement or "").strip(),
             str(market_prompt or "").strip(),
             str(seal_prompt or "").strip(),
         ]
+        if analyst_prompt and str(run_type or "").strip() != "chat":
+            prompt_parts.append(
+                "## 分析师设定\n" + analyst_prompt
+            )
         if str(run_type or "").strip() == "trade":
             prompt_parts.append(_TRADE_ENFORCEMENT_PROMPT)
         if str(run_type or "").strip() == "analysis":
@@ -1073,6 +1080,16 @@ class LLMService:
                 ("mx_get_positions", {}),
                 ("mx_get_balance", {}),
             ]
+            screener_query = str(
+                getattr(app_settings, "screener_query", "") or ""
+            ).strip()
+            if screener_query:
+                prefetch_plan.append(
+                    (
+                        "mx_screen_stocks",
+                        {"query": screener_query},
+                    )
+                )
             if freshness_tracker.requires_orders:
                 prefetch_plan.append(("mx_get_orders", {}))
 

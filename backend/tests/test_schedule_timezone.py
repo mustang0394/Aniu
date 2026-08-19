@@ -20,6 +20,11 @@ def _use_temp_db(monkeypatch, tmp_path) -> None:
     get_settings.cache_clear()
     database_module._engine = None
     database_module._session_local = None
+    init_db()
+    from tests.helpers import set_default_account_key
+
+    with session_scope() as db:
+        set_default_account_key(db)
 
 
 def _reset_db_state() -> None:
@@ -489,8 +494,9 @@ def test_process_due_schedule_runs_due_retry_when_window_arrives(monkeypatch, tm
     )
     monkeypatch.setattr(
         aniu_service_module.aniu_service,
-        "execute_run",
-        lambda account_id=None, trigger_source="manual", schedule_id=None: called.append(
+        "start_run_async",
+        lambda account_id=None, trigger_source="manual", schedule_id=None,
+        lease_token=None: called.append(
             (account_id, trigger_source, schedule_id)
         ),
     )
@@ -544,8 +550,9 @@ def test_process_due_schedule_does_not_probe_locked_before_execute(monkeypatch, 
     )
     monkeypatch.setattr(
         aniu_service_module.aniu_service,
-        "execute_run",
-        lambda account_id=None, trigger_source="manual", schedule_id=None: called.append(
+        "start_run_async",
+        lambda account_id=None, trigger_source="manual", schedule_id=None,
+        lease_token=None: called.append(
             (account_id, trigger_source, schedule_id)
         ),
     )
@@ -1099,7 +1106,13 @@ def test_recent_account_snapshot_merges_balance_positions_and_orders_from_runs(
     init_db()
 
     with session_scope() as db:
+        from app.db.models import TradingAccount
+
+        _account_id = db.query(TradingAccount).filter(
+            TradingAccount.slug == "default"
+        ).one().id
         oldest = StrategyRun(
+            trading_account_id=_account_id,
             status="completed",
             skill_payloads={
                 "tool_calls": [
@@ -1114,6 +1127,7 @@ def test_recent_account_snapshot_merges_balance_positions_and_orders_from_runs(
             },
         )
         middle = StrategyRun(
+            trading_account_id=_account_id,
             status="completed",
             skill_payloads={
                 "tool_calls": [
@@ -1128,6 +1142,7 @@ def test_recent_account_snapshot_merges_balance_positions_and_orders_from_runs(
             },
         )
         latest = StrategyRun(
+            trading_account_id=_account_id,
             status="completed",
             skill_payloads={
                 "tool_calls": [

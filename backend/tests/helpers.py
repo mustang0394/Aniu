@@ -135,3 +135,21 @@ def create_run(db, account_id: int, **overrides: Any):
     db.add(run)
     db.flush()
     return run
+
+def set_default_account_key(
+    db, key: str = "mx-key", *, llm: bool = True
+) -> None:
+    """给默认账户设置妙想 Key（并可选 LLM），供旧测试在账户化运行链下使用。"""
+    from app.services.account_service import account_service
+
+    accounts = account_service.list_accounts(db, include_archived=False)
+    if not accounts:
+        return
+    account = accounts[0]
+    account.mx_api_key = key
+    if llm:
+        account.account_llm_enabled = True
+        account.llm_base_url = "https://example.com/v1"
+        account.llm_api_key = "llm-key"
+        account.llm_model = "demo-model"
+    db.add(account)

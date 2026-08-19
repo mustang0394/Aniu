@@ -26,16 +26,44 @@ class Skill(BaseSkill):
             for tool_name in tool_names:
                 self.tool_run_type_filter.setdefault(tool_name, set()).add(run_type)
 
+    _TRADE_TOOL_NAMES = {"mx_moni_trade", "mx_moni_cancel"}
+
+    def _check_max_actions(
+        self, *, tool_name: str, context: dict[str, Any]
+    ) -> None:
+        if tool_name not in self._TRADE_TOOL_NAMES:
+            return
+        app_settings = context.get("app_settings")
+        max_actions = getattr(app_settings, "max_actions", None)
+        try:
+            limit = int(max_actions or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        if limit <= 0:
+            return
+        counter = context.setdefault("_aniu_trade_action_count", {"count": 0})
+        counter["count"] += 1
+        if counter["count"] > limit:
+            raise RuntimeError(
+                f"本账户每轮最多执行 {limit} 次交易动作（买入/卖出/撤单），"
+                f"已达上限，请停止交易操作并输出结论。"
+            )
+
     def handle(self, *, tool_name, arguments, context):
         app_settings = context.get("app_settings")
         client = context.get("client")
-        if client is not None:
+        self._check_max_actions(tool_name=tool_name, context=context or {})
+
+        def _execute() -> dict[str, Any]:
             return mx_execution_service.execute_tool(
                 tool_name=tool_name,
                 arguments=arguments,
                 client=client,
                 app_settings=app_settings,
             )
+
+        if client is not None:
+            return _execute()
 
         config = get_mx_client_config(context)
         with MXClient(api_key=config.api_key, base_url=config.base_url) as runtime_client:

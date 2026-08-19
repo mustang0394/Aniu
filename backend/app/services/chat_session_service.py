@@ -444,12 +444,7 @@ class ChatSessionService:
         return content_parts
 
     def _scope_condition(self, account_id: int):
-        from sqlalchemy import or_
-
-        return or_(
-            ChatSession.trading_account_id == account_id,
-            ChatSession.trading_account_id.is_(None),
-        )
+        return ChatSession.trading_account_id == account_id
 
     def list_sessions(
         self, db: Session, account_id: int | None = None
@@ -518,7 +513,7 @@ class ChatSessionService:
         else:
             account = account_service.resolve_single_active_account(db)
             resolved = account.id if account is not None else 0
-        if int(session.trading_account_id or 0) not in {resolved, 0}:
+        if int(session.trading_account_id or 0) != resolved:
             raise LookupError("会话不存在。")
         session.title = title.strip() or session.title
         db.flush()
@@ -540,7 +535,7 @@ class ChatSessionService:
         else:
             account = account_service.resolve_single_active_account(db)
             resolved = account.id if account is not None else 0
-        if int(session.trading_account_id or 0) not in {resolved, 0}:
+        if int(session.trading_account_id or 0) != resolved:
             raise LookupError("会话不存在。")
         db.delete(session)
 
@@ -556,9 +551,7 @@ class ChatSessionService:
         session = db.get(ChatSession, session_id)
         if session is None or str(session.kind or "user") != "user":
             raise LookupError("会话不存在。")
-        if account_id is not None and int(
-            session.trading_account_id or 0
-        ) not in {account_id, 0}:
+        if account_id is not None and int(session.trading_account_id or 0) != account_id:
             raise LookupError("会话不存在。")
 
         page_size = max(1, int(limit))
@@ -609,6 +602,16 @@ class ChatSessionService:
                 f"文件过大，最大允许 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB。"
             )
 
+        # 附件账户归属：优先从会话推导；会话不存在时拒绝（不允许无主附件）。
+        account_id: int | None = None
+        if session_id is not None:
+            session = db.get(ChatSession, session_id)
+            if session is None:
+                raise LookupError("会话不存在。")
+            account_id = int(session.trading_account_id or 0) or None
+            if account_id is None:
+                raise LookupError("会话未绑定交易账户，无法上传附件。")
+
         safe_filename, normalized_mime_type = _normalize_attachment_type(
             filename, mime_type
         )
@@ -618,6 +621,7 @@ class ChatSessionService:
         storage_path.write_bytes(data)
 
         attachment = ChatAttachment(
+            trading_account_id=account_id,
             filename=safe_filename,
             mime_type=normalized_mime_type,
             size=len(data),
@@ -639,7 +643,10 @@ class ChatSessionService:
         return path, attachment.mime_type, attachment.filename
 
     def _resolve_attachments(
-        self, db: Session, attachment_ids: list[int]
+        self,
+        db: Session,
+        attachment_ids: list[int],
+        account_id: int | None = None,
     ) -> list[ChatAttachment]:
         if not attachment_ids:
             return []
@@ -657,6 +664,11 @@ class ChatSessionService:
             record = by_id.get(attachment_id)
             if record is None:
                 raise LookupError(f"附件 {attachment_id} 不存在。")
+            if account_id is not None:
+                # 旧附件（NULL 归属）允许读取；新附件必须属于当前账户。
+                attachment_account = int(record.trading_account_id or 0) or None
+                if attachment_account is not None and attachment_account != account_id:
+                    raise LookupError(f"附件 {attachment_id} 不属于当前账户。")
             resolved.append(record)
         return resolved
 
@@ -747,13 +759,12 @@ class ChatSessionService:
             session = db.get(ChatSession, payload.session_id)
             if session is None or str(session.kind or "user") != "user":
                 raise LookupError("会话不存在。")
-            if int(session.trading_account_id or 0) not in {
-                account.id,
-                0,
-            }:
+            if int(session.trading_account_id or 0) != account.id:
                 raise LookupError("会话不存在。")
 
-            attachments = self._resolve_attachments(db, payload.attachment_ids)
+            attachments = self._resolve_attachments(
+                db, payload.attachment_ids, account_id=account.id
+            )
             attachment_payload = [_attachment_dict(item) for item in attachments]
             normalized_content = str(payload.content or "").strip()
 

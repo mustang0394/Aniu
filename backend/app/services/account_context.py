@@ -122,6 +122,7 @@ class AccountRunContext:
     schedule_id: int | None
     schedule_name: str | None
     task_prompt: str
+    timeout_seconds: int
 
     mx_api_key: str | None
     mx_api_base_url: str
@@ -160,6 +161,7 @@ class AccountRunContext:
             "schedule_id": self.schedule_id,
             "schedule_name": self.schedule_name,
             "task_prompt": self.task_prompt,
+            "timeout_seconds": self.timeout_seconds,
             "mx_api_key": self.mx_api_key,
             "mx_api_base_url": self.mx_api_base_url,
             "llm_base_url": self.llm.base_url,
@@ -319,10 +321,9 @@ def build_account_run_context(
         "https://mkapi2.dfcfs.com/finskillshub"
     )
 
-    # 账户 Key 优先；旧库升级场景账户 Key 为空时回退全局 Key。
-    mx_api_key = str(account.mx_api_key or "").strip() or str(
-        getattr(settings, "mx_api_key", None) or ""
-    ).strip() or None
+    # 妙想 Key 只允许账户级配置，禁止回退全局 Key（仅大模型允许全局兜底）。
+    # 旧库升级场景由 init_db 迁移把全局 Key 复制到默认账户，此处不再回退。
+    mx_api_key = str(account.mx_api_key or "").strip() or None
 
     automation_session = get_or_create_automation_session(
         db,
@@ -347,6 +348,13 @@ def build_account_run_context(
         schedule_id=schedule.id if schedule else None,
         schedule_name=schedule.name if schedule else None,
         task_prompt=task_prompt,
+        timeout_seconds=int(
+            getattr(schedule, "timeout_seconds", 0)
+            if schedule is not None
+            else 0
+        )
+        or int(getattr(account, "timeout_seconds", 0) or 0)
+        or 1800,
         mx_api_key=mx_api_key,
         mx_api_base_url=mx_base_url,
         llm=llm,

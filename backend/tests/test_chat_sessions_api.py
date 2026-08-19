@@ -102,6 +102,9 @@ def test_chat_session_stream_builds_multimodal_attachment_history_without_duplic
             settings.llm_api_key = "test-key"
             settings.llm_model = "test-model"
             settings.mx_api_key = "mx-test-key"
+            from tests.helpers import set_default_account_key
+
+            set_default_account_key(db, "mx-test-key")
 
             session = chat_session_service.create_session(db, title="Session A")
             image = chat_session_service.save_attachment(

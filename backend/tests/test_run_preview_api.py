@@ -14,6 +14,11 @@ from app.main import create_app
 from app.services.scheduler_service import scheduler_service
 from app.services.trading_calendar_service import trading_calendar_service
 
+def _default_account_id(db) -> int:
+    from app.db.models import TradingAccount
+
+    return db.query(TradingAccount).filter(TradingAccount.slug == "default").one().id
+
 
 def create_test_client(monkeypatch, tmp_path) -> TestClient:
     from app.services.aniu_service import aniu_service
@@ -46,7 +51,7 @@ def test_get_run_raw_tool_preview_returns_full_text(monkeypatch, tmp_path) -> No
     with create_test_client(monkeypatch, tmp_path) as client:
         headers = _auth_headers(client)
         with session_scope() as db:
-            run = StrategyRun(
+            run = StrategyRun(trading_account_id=_default_account_id(db), 
                 trigger_source="schedule",
                 run_type="analysis",
                 status="completed",
@@ -95,7 +100,7 @@ def test_get_run_raw_tool_preview_returns_404_for_missing_index(monkeypatch, tmp
     with create_test_client(monkeypatch, tmp_path) as client:
         headers = _auth_headers(client)
         with session_scope() as db:
-            run = StrategyRun(
+            run = StrategyRun(trading_account_id=_default_account_id(db), 
                 trigger_source="schedule",
                 run_type="analysis",
                 status="completed",

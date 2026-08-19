@@ -488,8 +488,9 @@ def test_schedule_lease_atomic_claim(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         aniu_service_module.aniu_service,
-        "execute_run",
-        lambda account_id=None, trigger_source="manual", schedule_id=None: called.append(
+        "start_run_async",
+        lambda account_id=None, trigger_source="manual", schedule_id=None,
+        lease_token=None: called.append(
             (account_id, trigger_source, schedule_id)
         ),
     )
@@ -533,8 +534,9 @@ def test_same_account_two_due_schedules_dispatches_one(monkeypatch, tmp_path) ->
     )
     monkeypatch.setattr(
         aniu_service_module.aniu_service,
-        "execute_run",
-        lambda account_id=None, trigger_source="manual", schedule_id=None: called.append(
+        "start_run_async",
+        lambda account_id=None, trigger_source="manual", schedule_id=None,
+        lease_token=None: called.append(
             (account_id, trigger_source, schedule_id)
         ),
     )
@@ -809,4 +811,386 @@ def test_global_overview_aggregates(monkeypatch, tmp_path) -> None:
     assert aggregate["initial_capital"] == 200000
     assert aggregate["total_return_ratio"] == 0.0
     assert payload["errors"] == []
+    teardown_test_database()
+
+
+# ── Review 修复回归（P1/P2） ──────────────────────────────────────────────
+
+
+def test_account_without_mx_key_cannot_run(monkeypatch, tmp_path) -> None:
+    """P1-1：账户未配置妙想 Key 时禁止运行，禁止回退全局 Key。"""
+    reset_test_database(monkeypatch, tmp_path)
+    with session_scope() as db:
+        from app.services.aniu_service import aniu_service as aniu_svc
+
+        settings = aniu_svc.get_or_create_settings(db)
+        settings.mx_api_key = "global-key"
+        settings.llm_base_url = "https://global.example.com/v1"
+        settings.llm_api_key = "global-llm-key"
+        settings.llm_model = "global-model"
+        db.add(settings)
+        account = create_account(db, slug="no-key", mx_api_key=None)
+        db.commit()
+        account_id = account.id
+
+    from app.services.aniu_service import aniu_service
+
+    with pytest.raises(RuntimeError, match="未配置妙想 Key"):
+        aniu_service.execute_run(
+            account_id=account_id, trigger_source="manual"
+        )
+    teardown_test_database()
+
+
+def test_trade_disabled_rejects_mutations(monkeypatch, tmp_path) -> None:
+    """P1-2：trade_enabled=false 时拒绝下单与撤单。"""
+    from types import SimpleNamespace
+
+    from skills.mx_core.execution import mx_execution_service as mx_service
+
+    app_settings = SimpleNamespace(trade_enabled=False, max_actions=2)
+
+    with pytest.raises(RuntimeError, match="已停用交易"):
+        mx_service._handle_moni_trade(
+            client=None,
+            app_settings=app_settings,
+            arguments={"action": "BUY", "symbol": "600519.SH", "quantity": 100},
+        )
+    with pytest.raises(RuntimeError, match="已停用交易"):
+        mx_service._handle_moni_cancel(
+            client=None,
+            app_settings=app_settings,
+            arguments={"cancel_type": "all"},
+        )
+
+
+def test_trade_max_actions_limit_enforced(monkeypatch, tmp_path) -> None:
+    """P1-2：max_actions 在运行上下文内计数并拦截超限交易动作。"""
+    reset_test_database(monkeypatch, tmp_path)
+    from types import SimpleNamespace
+
+    from app.skills.registry import skill_registry
+
+    context: dict = {
+        "app_settings": SimpleNamespace(max_actions=2, trade_enabled=True),
+        "mx_client_config": {"api_key": "key", "base_url": "https://x"},
+        "client": None,
+    }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def close(self):
+            pass
+
+        def trade(self, **kwargs):
+            return {"ok": True}
+
+        def cancel_order(self, **kwargs):
+            return {"ok": True}
+
+    import skills.mx_core.handler as handler_module
+
+    original_mx = handler_module.MXClient
+
+    class StubMXClient(FakeClient):
+        pass
+
+    handler_module.MXClient = StubMXClient  # type: ignore[assignment]
+    try:
+        for _ in range(2):
+            result = skill_registry.execute_tool(
+                tool_name="mx_moni_trade",
+                arguments={
+                    "action": "BUY",
+                    "symbol": "600519.SH",
+                    "quantity": 100,
+                    "price_type": "MARKET",
+                },
+                context=context,
+            )
+            assert result.get("ok") is True
+        # 第三次超限
+        result = skill_registry.execute_tool(
+            tool_name="mx_moni_trade",
+            arguments={
+                "action": "SELL",
+                "symbol": "600519.SH",
+                "quantity": 100,
+                "price_type": "MARKET",
+            },
+            context=context,
+        )
+        assert result.get("ok") is False
+        assert "最多执行 2 次交易动作" in str(result.get("error") or "")
+    finally:
+        handler_module.MXClient = original_mx
+    teardown_test_database()
+
+
+def test_settings_update_does_not_overwrite_masked_uzi_key(monkeypatch, tmp_path) -> None:
+    """P1-3：脱敏的 uzi_mx_api_key 提交不会覆盖真实 Key。"""
+    from app.schemas.aniu import AppSettingsUpdate
+    from app.services.aniu_service import aniu_service
+
+    reset_test_database(monkeypatch, tmp_path)
+    with session_scope() as db:
+        settings = aniu_service.get_or_create_settings(db)
+        settings.uzi_mx_api_key = "real-uzi-key-1234567890"
+        settings.mx_api_key = "real-mx-key-1234567890"
+        db.add(settings)
+        db.commit()
+
+    payload = AppSettingsUpdate(
+        app_display_name="Aniu",
+        provider_name="openai-compatible",
+        llm_model="gpt-4o-mini",
+        llm_max_retries=3,
+        system_prompt="分析师",
+        automation_context_window_tokens=128000,
+        automation_recent_message_limit=24,
+        automation_enable_auto_compaction=True,
+        automation_idle_summary_hours=12,
+        llm_enable_reasoning_content_echo=False,
+        tg_notify_trade_enabled=False,
+        capital_seal_enabled=False,
+        capital_seal_amount=0,
+        uzi_mx_api_key="rea****7890",
+        mx_api_key="rea****7890",
+        allowed_markets=["sh_main", "sz_main"],
+    )
+    with session_scope() as db:
+        updated = aniu_service.update_settings(db, payload)
+        assert updated.uzi_mx_api_key == "real-uzi-key-1234567890"
+        assert updated.mx_api_key == "real-mx-key-1234567890"
+    teardown_test_database()
+
+
+def test_schedule_lease_ownership_prevents_stale_cleanup(monkeypatch, tmp_path) -> None:
+    """P1-5：租约过期被接管后，旧 worker 的清理不能生效。"""
+    from app.services import aniu_service as aniu_service_module
+
+    reset_test_database(monkeypatch, tmp_path)
+    from app.db.models import StrategySchedule
+
+    with session_scope() as db:
+        account = create_account(
+            db,
+            slug="acct-a",
+            account_llm_enabled=True,
+            llm_base_url="https://acct.example.com/v1",
+            llm_api_key="acct-key",
+            llm_model="acct-model",
+        )
+        db.commit()
+        account_id = account.id
+        schedule = create_schedule(
+            db,
+            account_id,
+            name="盘前分析",
+            enabled=True,
+            next_run_at=datetime(2026, 4, 13, 7, 30, tzinfo=timezone.utc),
+        )
+        db.commit()
+        schedule_id = schedule.id
+
+    shanghai_tz = __import__("zoneinfo").ZoneInfo("Asia/Shanghai")
+    now_naive = datetime(2026, 4, 13, 7, 31).replace(tzinfo=None)
+    with session_scope() as db:
+        schedule = db.get(StrategySchedule, schedule_id)
+        # 模拟：新 worker 已接管（新 token），旧 worker 仍持旧 token 运行中。
+        schedule.lease_token = "new-owner-token"
+        schedule.lease_until = now_naive + timedelta(seconds=600)
+        db.add(schedule)
+        db.commit()
+
+    # 旧 worker 结束：用旧 token 调用执行完成路径。
+    run_id = None
+    with session_scope() as db:
+        from app.db.models import StrategyRun as RunModel
+
+        run_id = aniu_service_module.aniu_service._prepare_run(
+            trigger_source="schedule",
+            account_id=account_id,
+            schedule_id=schedule_id,
+            lease_token="old-owner-token",
+        )[0]
+        run = db.get(RunModel, run_id)
+        run.status = "completed"
+        run.finished_at = now_naive
+        db.add(run)
+        db.commit()
+
+    # 旧 worker 的清理被拒绝：新 token 与 next_run_at 保持不变。
+    with session_scope() as db:
+        schedule = db.get(StrategySchedule, schedule_id)
+        assert schedule.lease_token == "new-owner-token"
+    teardown_test_database()
+
+
+def test_attachment_is_scoped_to_account(monkeypatch, tmp_path) -> None:
+    """P1-6：账户 B 不能引用账户 A 的附件。"""
+    reset_test_database(monkeypatch, tmp_path)
+    with session_scope() as db:
+        account_a = create_account(db, slug="acct-a")
+        account_b = create_account(db, slug="acct-b")
+        session_a = ChatSessionForTest(db, account_a.id)
+        session_b = ChatSessionForTest(db, account_b.id)
+        db.commit()
+        attachment = None
+        from app.db.models import ChatAttachment
+
+        attachment = ChatAttachment(
+            trading_account_id=account_a.id,
+            filename="a.txt",
+            mime_type="text/plain",
+            size=1,
+            storage_path="/tmp/a.txt",
+        )
+        db.add(attachment)
+        db.commit()
+        attachment_id = attachment.id
+        a_id, b_id = account_a.id, account_b.id
+
+    from app.services.chat_session_service import chat_session_service
+
+    with session_scope() as db:
+        # A 可以引用自己的附件
+        resolved = chat_session_service._resolve_attachments(
+            db, [attachment_id], account_id=a_id
+        )
+        assert len(resolved) == 1
+        # B 引用 A 的附件被拒绝
+        with pytest.raises(LookupError, match="不属于当前账户"):
+            chat_session_service._resolve_attachments(
+                db, [attachment_id], account_id=b_id
+            )
+    teardown_test_database()
+
+
+class ChatSessionForTest:
+    """占位避免 import 冲突：实际使用 app.db.models.ChatSession。"""
+
+    def __new__(cls, db, account_id):
+        from app.db.models import ChatSession
+
+        return ChatSession(
+            title="测试会话", kind="user", trading_account_id=account_id
+        )
+
+
+def test_account_supplement_uses_analyst_prompt_and_screener(monkeypatch, tmp_path) -> None:
+    """P2-8：analyst_prompt 注入系统提示词、screener_query 加入预取。"""
+    from app.services.llm_service import llm_service
+
+    reset_test_database(monkeypatch, tmp_path)
+    app_settings = SimpleNamespace(
+        system_prompt="基础提示词",
+        analyst_prompt="我是趋势跟踪分析师，只做右侧突破。",
+        market_query="行情",
+        news_query="资讯",
+        screener_query="今天强势股",
+        allowed_markets_json='["sh_main"]',
+        capital_seal_enabled=False,
+        capital_seal_amount=0,
+        disabled_skill_ids=frozenset(),
+    )
+    prompt = llm_service._augment_system_prompt(
+        app_settings.system_prompt,
+        run_type="analysis",
+        app_settings=app_settings,
+    )
+    assert "我是趋势跟踪分析师" in prompt
+    assert "分析师设定" in prompt
+    teardown_test_database()
+
+
+def test_run_context_carries_schedule_timeout(monkeypatch, tmp_path) -> None:
+    """P2-9：AccountRunContext 携带任务级 timeout_seconds。"""
+    from app.services.account_context import build_account_run_context
+
+    reset_test_database(monkeypatch, tmp_path)
+    from app.db.models import StrategySchedule
+
+    with session_scope() as db:
+        account = create_account(
+            db,
+            slug="acct-a",
+            account_llm_enabled=True,
+            llm_base_url="https://acct.example.com/v1",
+            llm_api_key="acct-key",
+            llm_model="acct-model",
+        )
+        db.commit()
+        account_id = account.id
+        schedule = create_schedule(
+            db,
+            account_id,
+            name="盘前分析",
+            timeout_seconds=120,
+        )
+        db.commit()
+        schedule_id = schedule.id
+
+    with session_scope() as db:
+        context = build_account_run_context(
+            db,
+            account_id=account_id,
+            schedule_id=schedule_id,
+            manual_run_type=None,
+        )
+        assert context.timeout_seconds == 120
+        assert context.to_settings_snapshot()["timeout_seconds"] == 120
+    teardown_test_database()
+
+
+def test_disabled_account_due_schedule_advances_next_run(monkeypatch, tmp_path) -> None:
+    """P2-10：停用账户的到期任务释放租约并推进 next_run_at，避免每轮重试。"""
+    from app.services import aniu_service as aniu_service_module
+    from app.db.models import StrategySchedule as ScheduleModel
+
+    reset_test_database(monkeypatch, tmp_path)
+    shanghai_tz = __import__("zoneinfo").ZoneInfo("Asia/Shanghai")
+    with session_scope() as db:
+        account = create_account(db, slug="disabled-acct", enabled=False)
+        db.commit()
+        account_id = account.id
+        schedule = create_schedule(
+            db,
+            account_id,
+            name="盘前分析",
+            enabled=True,
+            next_run_at=datetime(2026, 4, 13, 7, 30, tzinfo=timezone.utc),
+        )
+        db.commit()
+        schedule_id = schedule.id
+
+    monkeypatch.setattr(
+        aniu_service_module,
+        "now_shanghai",
+        lambda: datetime(2026, 4, 13, 15, 31, tzinfo=shanghai_tz),
+    )
+    monkeypatch.setattr(
+        aniu_service_module.trading_calendar_service, "is_trading_day", lambda d: True
+    )
+    called: list[tuple] = []
+    monkeypatch.setattr(
+        aniu_service_module.aniu_service,
+        "start_run_async",
+        lambda **kwargs: called.append(kwargs),
+    )
+    aniu_service_module.aniu_service.process_due_schedule()
+    assert called == []
+    with session_scope() as db:
+        schedule = db.get(ScheduleModel, schedule_id)
+        assert schedule.lease_token is None
+        assert schedule.lease_until is None
+        assert schedule.next_run_at is not None
     teardown_test_database()

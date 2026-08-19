@@ -1,22 +1,33 @@
 <template>
   <div class="space-y-5 sm:space-y-6">
     <UiPageHeader
-      title="定时设置"
+      :title="schedulePageTitle"
       kicker="Schedules"
-      description="配置分析与交易时段的自动任务"
+      description="定时任务随交易账户隔离，每个账户拥有自己独立的分析与交易任务"
     >
-      <template v-if="store.hasMultipleAccounts">
-        <select
-          :value="store.selectedAccountId ?? ''"
-          class="input h-9 w-auto py-1"
-          @change="handleAccountSwitch"
-        >
-          <option v-for="acc in store.activeAccounts" :key="acc.id" :value="acc.id">
-            {{ acc.name }}（{{ acc.slug }}）
-          </option>
-        </select>
-      </template>
+      <select
+        v-if="store.activeAccounts.length > 0"
+        :value="store.selectedAccountId ?? ''"
+        class="h-9 w-auto max-w-[16rem] cursor-pointer rounded-[10px] border border-separator-strong bg-card-solid/80 px-3 text-body text-label outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent-ring"
+        @change="handleAccountSwitch"
+      >
+        <option v-for="acc in store.activeAccounts" :key="acc.id" :value="acc.id">
+          {{ acc.name }}（{{ acc.slug }}）
+        </option>
+      </select>
     </UiPageHeader>
+
+    <!-- 当前账户提示 -->
+    <div
+      v-if="store.selectedAccount"
+      class="flex flex-wrap items-center gap-2 rounded-[14px] border border-accent/15 bg-accent-soft/60 px-4 py-3 text-body"
+    >
+      <span class="text-label-secondary">当前账户：</span>
+      <UiBadge tone="analysis">{{ store.selectedAccount.name }}</UiBadge>
+      <span class="text-footnote text-label-tertiary">
+        以下所有定时任务仅作用于该账户的妙想 Key 与模拟仓位
+      </span>
+    </div>
 
     <!-- Active schedules overview -->
     <UiPanel title="当前定时任务" kicker="Live Schedules">
@@ -219,6 +230,13 @@ const store = useTradingAccountsStore()
 const busy = ref(false)
 const schedules = ref<import('@/types').ScheduleConfig[]>([])
 const errorMessage = ref('')
+
+const schedulePageTitle = computed(() => {
+  if (store.selectedAccount) {
+    return `定时设置 · ${store.selectedAccount.name}`
+  }
+  return '定时设置'
+})
 
 interface ScheduleCard {
   id: number

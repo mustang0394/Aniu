@@ -25,6 +25,17 @@ from skills.mx_core.parsers import extract_candidates
 from skills.mx_core.tool_specs import TOOL_PROFILES, TOOL_SPECS, build_tools
 
 
+def _trade_enabled(app_settings: Any) -> bool:
+    if app_settings is None:
+        return True
+    flag = getattr(app_settings, "trade_enabled", None)
+    if flag is None:
+        return True
+    if isinstance(flag, str):
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(flag)
+
+
 ERROR_HINTS: tuple[tuple[str, str], ...] = (
     ("401", "API Key 可能错误、失效或未正确配置，请检查 MX_APIKEY。"),
     ("API密钥不存在", "API Key 可能错误、失效或未正确配置，请检查 MX_APIKEY。"),
@@ -299,6 +310,10 @@ class MXExecutionService:
     def _handle_moni_trade(
         self, *, client: MXClient, app_settings: Any, arguments: dict[str, Any]
     ) -> dict[str, Any]:
+        if not _trade_enabled(app_settings):
+            raise RuntimeError(
+                "当前交易账户已停用交易（trade_enabled=false），拒绝所有模拟交易操作。"
+            )
         action = str(arguments.get("action") or "").upper()
         symbol = str(arguments.get("symbol") or "").strip()
         price_type = str(arguments.get("price_type") or "MARKET").upper()
@@ -453,7 +468,10 @@ class MXExecutionService:
     def _handle_moni_cancel(
         self, *, client: MXClient, app_settings: Any, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        del app_settings
+        if not _trade_enabled(app_settings):
+            raise RuntimeError(
+                "当前交易账户已停用交易（trade_enabled=false），拒绝撤单操作。"
+            )
         cancel_type = str(arguments.get("cancel_type") or "").strip().lower()
         order_id = str(arguments.get("order_id") or "").strip() or None
         stock_code = str(arguments.get("stock_code") or "").strip() or None

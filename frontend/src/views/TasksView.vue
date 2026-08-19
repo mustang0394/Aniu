@@ -4,7 +4,7 @@
       <select
         v-if="store.hasMultipleAccounts"
         :value="store.selectedAccountId ?? ''"
-        class="input h-9 w-auto py-1"
+        class="h-9 w-auto cursor-pointer rounded-[10px] border border-separator-strong bg-card-solid/80 px-3 text-body text-label outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent-ring"
         @change="handleAccountSwitch"
       >
         <option v-for="acc in store.activeAccounts" :key="acc.id" :value="acc.id">

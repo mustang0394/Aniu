@@ -23,6 +23,12 @@ from app.services.chat_session_service import chat_session_service
 from app.services.trading_calendar_service import trading_calendar_service
 
 
+
+def _default_account_id(db) -> int:
+    from app.db.models import TradingAccount
+
+    return db.query(TradingAccount).filter(TradingAccount.slug == "default").one().id
+
 def create_test_client(monkeypatch, tmp_path) -> TestClient:
     from app.services.aniu_service import aniu_service
 
@@ -727,7 +733,7 @@ def test_chat_context_tools_list_and_read_run_detail(monkeypatch, tmp_path) -> N
     with create_test_client(monkeypatch, tmp_path):
         with session_scope() as db:
             db.add(
-                StrategyRun(
+                StrategyRun(trading_account_id=_default_account_id(db), 
                     trigger_source="manual",
                     run_type="analysis",
                     schedule_name="盘前分析",
@@ -779,7 +785,7 @@ def test_runs_endpoint_returns_lightweight_summary(monkeypatch, tmp_path) -> Non
     with create_test_client(monkeypatch, tmp_path) as client:
         with session_scope() as db:
             db.add(
-                StrategyRun(
+                StrategyRun(trading_account_id=_default_account_id(db), 
                     trigger_source="manual",
                     run_type="analysis",
                     schedule_name="盘前分析",
@@ -830,14 +836,14 @@ def test_runs_endpoint_filters_by_date(monkeypatch, tmp_path) -> None:
         with session_scope() as db:
             db.add_all(
                 [
-                    StrategyRun(
+                    StrategyRun(trading_account_id=_default_account_id(db), 
                         trigger_source="manual",
                         run_type="analysis",
                         status="completed",
                         analysis_summary="today",
                         started_at=datetime(2026, 4, 14, 8, 30, 0),
                     ),
-                    StrategyRun(
+                    StrategyRun(trading_account_id=_default_account_id(db), 
                         trigger_source="manual",
                         run_type="analysis",
                         status="completed",
@@ -865,7 +871,7 @@ def test_runs_feed_returns_pagination_metadata(monkeypatch, tmp_path) -> None:
         with session_scope() as db:
             db.add_all(
                 [
-                    StrategyRun(
+                    StrategyRun(trading_account_id=_default_account_id(db), 
                         trigger_source="manual",
                         run_type="analysis",
                         status="completed",
@@ -924,7 +930,7 @@ def test_runtime_overview_endpoint_returns_aggregated_stats(monkeypatch, tmp_pat
         with session_scope() as db:
             db.add_all(
                 [
-                    StrategyRun(
+                    StrategyRun(trading_account_id=_default_account_id(db), 
                         trigger_source="manual",
                         run_type="analysis",
                         status="completed",
@@ -947,7 +953,7 @@ def test_runtime_overview_endpoint_returns_aggregated_stats(monkeypatch, tmp_pat
                         started_at=shanghai_now.replace(tzinfo=None),
                         finished_at=shanghai_now.replace(tzinfo=None),
                     ),
-                    StrategyRun(
+                    StrategyRun(trading_account_id=_default_account_id(db), 
                         trigger_source="manual",
                         run_type="analysis",
                         status="failed",
@@ -991,7 +997,7 @@ def test_delete_run_endpoint_removes_run_and_related_messages(monkeypatch, tmp_p
             session = ChatSession(title="自动化交易会话", kind="automation", slug="automation-default")
             db.add(session)
             db.flush()
-            run = StrategyRun(
+            run = StrategyRun(trading_account_id=_default_account_id(db), 
                 trigger_source="manual",
                 run_type="analysis",
                 status="completed",
@@ -1039,7 +1045,7 @@ def test_delete_run_endpoint_removes_run_and_related_messages(monkeypatch, tmp_p
 def test_delete_run_endpoint_rejects_running_task(monkeypatch, tmp_path) -> None:
     with create_test_client(monkeypatch, tmp_path) as client:
         with session_scope() as db:
-            run = StrategyRun(
+            run = StrategyRun(trading_account_id=_default_account_id(db), 
                 trigger_source="manual",
                 run_type="analysis",
                 status="running",
@@ -1064,7 +1070,7 @@ def test_delete_run_endpoint_force_deletes_stuck_running_task(monkeypatch, tmp_p
 
     with create_test_client(monkeypatch, tmp_path) as client:
         with session_scope() as db:
-            run = StrategyRun(
+            run = StrategyRun(trading_account_id=_default_account_id(db), 
                 trigger_source="manual",
                 run_type="analysis",
                 status="running",
@@ -1098,7 +1104,7 @@ def test_delete_run_endpoint_force_still_rejects_when_service_is_busy(monkeypatc
 
     with create_test_client(monkeypatch, tmp_path) as client:
         with session_scope() as db:
-            run = StrategyRun(
+            run = StrategyRun(trading_account_id=_default_account_id(db), 
                 trigger_source="manual",
                 run_type="analysis",
                 status="running",

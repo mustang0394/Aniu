@@ -89,6 +89,17 @@ class PersistentRunSessionContext:
     messages: list[dict[str, Any]]
 
 
+def _owns_schedule_lease(schedule: Any, lease_token: str | None) -> bool:
+    """lease 所有权校验：token 匹配才算持有者；无条件清理仅限无租约状态。"""
+    current_token = str(getattr(schedule, "lease_token", None) or "")
+    if not current_token:
+        # 无租约：手动运行等场景可正常更新调度状态。
+        return True
+    if not lease_token:
+        return False
+    return current_token == str(lease_token)
+
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -336,17 +347,9 @@ class AniuService:
         self, db: Session, account_id: int | None = None
     ) -> list[StrategySchedule]:
         resolved_account_id = self._resolve_account_id(db, account_id)
-        from sqlalchemy import or_
-
         stmt = (
             select(StrategySchedule)
-            .where(
-                or_(
-                    StrategySchedule.trading_account_id == resolved_account_id,
-                    # 兼容旧库/测试直插的 NULL 归属记录（单账户语义）
-                    StrategySchedule.trading_account_id.is_(None),
-                )
-            )
+            .where(StrategySchedule.trading_account_id == resolved_account_id)
             .order_by(StrategySchedule.id.asc())
         )
         schedules = list(db.scalars(stmt).all())
@@ -414,7 +417,13 @@ class AniuService:
 
     def update_settings(self, db: Session, payload: AppSettingsUpdate) -> AppSettings:
         instance = self.get_or_create_settings(db)
-        sensitive_fields = {"mx_api_key", "llm_api_key", "tg_bot_token", "tg_chat_id"}
+        sensitive_fields = {
+            "mx_api_key",
+            "uzi_mx_api_key",
+            "llm_api_key",
+            "tg_bot_token",
+            "tg_chat_id",
+        }
         changed_fields: list[str] = []
         orm_fields = (
             payload.to_orm_fields()
@@ -492,13 +501,8 @@ class AniuService:
         account_id: int | None = None,
     ) -> list[StrategyRun]:
         resolved_account_id = self._resolve_account_id(db, account_id)
-        from sqlalchemy import or_
-
         stmt = select(StrategyRun).where(
-            or_(
-                StrategyRun.trading_account_id == resolved_account_id,
-                StrategyRun.trading_account_id.is_(None),
-            )
+            StrategyRun.trading_account_id == resolved_account_id
         )
 
         if run_date is not None:
@@ -573,16 +577,11 @@ class AniuService:
         self, db: Session, run_id: int, account_id: int | None = None
     ) -> StrategyRun | None:
         resolved_account_id = self._resolve_account_id(db, account_id)
-        from sqlalchemy import or_
-
         stmt = (
             select(StrategyRun)
             .where(
                 StrategyRun.id == run_id,
-                or_(
-                    StrategyRun.trading_account_id == resolved_account_id,
-                    StrategyRun.trading_account_id.is_(None),
-                ),
+                StrategyRun.trading_account_id == resolved_account_id,
             )
             .options(selectinload(StrategyRun.trade_orders))
         )
@@ -710,15 +709,10 @@ class AniuService:
         account_id: int | None = None,
     ) -> None:
         resolved_account_id = self._resolve_account_id(db, account_id)
-        from sqlalchemy import or_
-
         run = db.scalar(
             select(StrategyRun).where(
                 StrategyRun.id == run_id,
-                or_(
-                    StrategyRun.trading_account_id == resolved_account_id,
-                    StrategyRun.trading_account_id.is_(None),
-                ),
+                StrategyRun.trading_account_id == resolved_account_id,
             )
         )
         if run is None:
@@ -1449,9 +1443,7 @@ class AniuService:
             settings = self.get_or_create_settings(db)
 
             account_settings = SimpleNamespace(
-                mx_api_key=str(account.mx_api_key or "").strip()
-                or str(getattr(settings, "mx_api_key", None) or "").strip()
-                or None,
+                mx_api_key=str(account.mx_api_key or "").strip() or None,
                 mx_api_url=str(get_settings().mx_api_url or "").strip() or None,
                 allowed_markets_json=account.allowed_markets_json,
                 capital_seal_enabled=bool(account.capital_seal_enabled),
@@ -1736,9 +1728,7 @@ class AniuService:
         from app.services.account_context import resolve_llm_config
 
         llm_config = resolve_llm_config(account, settings)
-        mx_api_key = str(account.mx_api_key or "").strip() or str(
-            getattr(settings, "mx_api_key", None) or ""
-        ).strip() or None
+        mx_api_key = str(account.mx_api_key or "").strip() or None
         snapshot = SimpleNamespace(
             account_id=account.id,
             account_name=str(account.name or "").strip() or f"账户{account.id}",
@@ -2161,6 +2151,7 @@ class AniuService:
         account_id: int,
         schedule_id: int | None,
         manual_run_type: str | None = None,
+        lease_token: str | None = None,
     ) -> tuple[int, AccountRunContext]:
         """准备一次账户运行：校验账户/任务、构建上下文、创建 StrategyRun（§8.1）。"""
         with session_scope() as db:
@@ -2197,6 +2188,7 @@ class AniuService:
         schedule_id: int | None,
         emit: Any = None,
         return_full_run: bool = True,
+        lease_token: str | None = None,
     ) -> StrategyRun | None:
         session_context: PersistentRunSessionContext | None = None
         automation_phase = "llm"
@@ -2335,17 +2327,19 @@ class AniuService:
                 if schedule_id:
                     schedule = db.get(StrategySchedule, schedule_id)
                     if schedule is not None:
-                        schedule.last_run_at = completed_at
-                        schedule.retry_count = 0
-                        schedule.retry_after_at = None
-                        # 完成即释放租约（§11.5）
-                        schedule.lease_token = None
-                        schedule.lease_until = None
-                        schedule.next_run_at = self._compute_next_run_at(
-                            schedule.cron_expression,
-                            from_time=completed_at_shanghai,
-                        )
-                        db.add(schedule)
+                        owner_ok = _owns_schedule_lease(schedule, lease_token)
+                        if owner_ok:
+                            schedule.last_run_at = completed_at
+                            schedule.retry_count = 0
+                            schedule.retry_after_at = None
+                            # 完成即释放租约（§11.5），仅持有 token 的运行可清理
+                            schedule.lease_token = None
+                            schedule.lease_until = None
+                            schedule.next_run_at = self._compute_next_run_at(
+                                schedule.cron_expression,
+                                from_time=completed_at_shanghai,
+                            )
+                            db.add(schedule)
 
                 if session_context is not None:
                     session = db.get(ChatSession, session_context.session_id)
@@ -2559,7 +2553,9 @@ class AniuService:
                             db.add(run)
                 if schedule_id:
                     schedule = db.get(StrategySchedule, schedule_id)
-                    if schedule is not None:
+                    if schedule is not None and _owns_schedule_lease(
+                        schedule, lease_token
+                    ):
                         schedule.last_run_at = now_utc()
                         # 失败也要释放租约（§11.5），重试由 retry_after_at 机制驱动
                         schedule.lease_token = None
@@ -2599,6 +2595,7 @@ class AniuService:
         trigger_source: str = "manual",
         schedule_id: int | None = None,
         manual_run_type: str | None = None,
+        lease_token: str | None = None,
     ) -> StrategyRun:
         """账户级串行执行（§11.1）：同一账户互斥，不同账户可并发。"""
         with session_scope() as db:
@@ -2612,12 +2609,14 @@ class AniuService:
                 account_id=resolved_account_id,
                 schedule_id=schedule_id,
                 manual_run_type=manual_run_type,
+                lease_token=lease_token,
             )
             return self._run_body(
                 run_id=run_id,
                 account_context=account_context,
                 trigger_source=trigger_source,
                 schedule_id=schedule_id,
+                lease_token=lease_token,
             )
         finally:
             lock.release()
@@ -2629,6 +2628,7 @@ class AniuService:
         trigger_source: str = "manual",
         schedule_id: int | None = None,
         manual_run_type: str | None = None,
+        lease_token: str | None = None,
     ) -> int:
         """Launch a run on a background thread and return its run_id immediately.
 
@@ -2647,6 +2647,7 @@ class AniuService:
                 account_id=resolved_account_id,
                 schedule_id=schedule_id,
                 manual_run_type=manual_run_type,
+                lease_token=lease_token,
             )
         except Exception:
             lock.release()
@@ -2663,6 +2664,7 @@ class AniuService:
                     schedule_id=schedule_id,
                     emit=emit,
                     return_full_run=False,
+                    lease_token=lease_token,
                 )
             except Exception:
                 logger.exception("async run worker failed: run_id=%s", run_id)
@@ -2725,9 +2727,11 @@ class AniuService:
                 ):
                     due.append(schedule)
 
-            claimed_ids: list[tuple[int, int]] = []
+            claimed_ids: list[tuple[int, int, str]] = []
             for schedule in due:
                 # 原子抢占：受影响行数为 1 表示抢占成功，0 表示跳过。
+                # 每个任务独立 token，运行完成/失败时按 token 校验所有权后再清理。
+                claim_token = secrets.token_hex(16)
                 result = db.execute(
                     sa_update(StrategySchedule)
                     .where(
@@ -2747,7 +2751,7 @@ class AniuService:
                         ),
                     )
                     .values(
-                        lease_token=secrets.token_hex(16),
+                        lease_token=claim_token,
                         lease_until=now_naive
                         + timedelta(seconds=SCHEDULE_LEASE_SECONDS),
                     )
@@ -2755,16 +2759,16 @@ class AniuService:
                 )
                 if result.rowcount == 1:
                     claimed_ids.append(
-                        (schedule.id, int(schedule.trading_account_id or 0))
+                        (schedule.id, int(schedule.trading_account_id or 0), claim_token)
                     )
             db.commit()
 
             if not claimed_ids:
                 return
 
-            # 同一账户同一轮只派发一个任务；不同账户允许并发。
+            # 同一账户同一轮只派发一个任务；不同账户通过后台线程并发执行。
             dispatched_accounts: set[int] = set()
-            for schedule_id, account_id in claimed_ids:
+            for schedule_id, account_id, claim_token in claimed_ids:
                 if account_id in dispatched_accounts:
                     with session_scope() as db2:
                         _clear_lease(db2, schedule_id)
@@ -2781,12 +2785,33 @@ class AniuService:
                         if schedule is not None:
                             schedule.trading_account_id = account_id
                             db2.add(schedule)
+                # 停用/归档账户的到期任务：释放租约并推进 next_run_at，避免每轮重复尝试。
+                with session_scope() as db2:
+                    account = db2.get(TradingAccount, account_id)
+                    if account is None or not account.enabled or account.archived:
+                        schedule = db2.get(StrategySchedule, schedule_id)
+                        if schedule is not None:
+                            schedule.lease_token = None
+                            schedule.lease_until = None
+                            schedule.next_run_at = self._compute_next_run_at(
+                                schedule.cron_expression,
+                                from_time=now_sh,
+                            )
+                            db2.add(schedule)
+                        logger.info(
+                            "process_due_schedule skipped (account disabled/archived): "
+                            "schedule_id=%s account_id=%s",
+                            schedule_id,
+                            account_id,
+                        )
+                        continue
                 dispatched_accounts.add(account_id)
                 try:
-                    self.execute_run(
+                    self.start_run_async(
                         account_id=account_id,
                         trigger_source="schedule",
                         schedule_id=schedule_id,
+                        lease_token=claim_token,
                     )
                 except RuntimeError as exc:
                     if "已有任务正在运行" in str(exc):
@@ -2800,7 +2825,7 @@ class AniuService:
                             _clear_lease(db2, schedule_id)
                         continue
                     logger.exception(
-                        "process_due_schedule run failed: schedule_id=%s account_id=%s",
+                        "process_due_schedule run launch failed: schedule_id=%s account_id=%s",
                         schedule_id,
                         account_id,
                     )
@@ -2808,7 +2833,7 @@ class AniuService:
                         _clear_lease(db2, schedule_id)
                 except Exception:  # noqa: BLE001
                     logger.exception(
-                        "process_due_schedule run failed: schedule_id=%s account_id=%s",
+                        "process_due_schedule run launch failed: schedule_id=%s account_id=%s",
                         schedule_id,
                         account_id,
                     )
@@ -2829,16 +2854,9 @@ class AniuService:
         dict[str, Any] | None,
     ]:
         resolved_account_id = self._resolve_account_id(db, account_id)
-        from sqlalchemy import or_
-
         stmt = (
             select(StrategyRun)
-            .where(
-                or_(
-                    StrategyRun.trading_account_id == resolved_account_id,
-                    StrategyRun.trading_account_id.is_(None),
-                )
-            )
+            .where(StrategyRun.trading_account_id == resolved_account_id)
             .order_by(StrategyRun.started_at.desc())
             .limit(20)
         )

@@ -46,6 +46,7 @@ def init_db() -> None:
     _ensure_trading_account_columns(engine)
     _ensure_chat_session_columns(engine)
     _ensure_chat_message_columns(engine)
+    _ensure_chat_attachment_columns(engine)
     _ensure_strategy_schedule_columns(engine)
     _ensure_strategy_run_columns(engine)
     _ensure_chat_session_indexes(engine)
@@ -277,6 +278,39 @@ def _ensure_chat_message_columns(engine) -> None:
             if column_name in current_columns:
                 continue
             connection.execute(text(statement))
+
+
+def _ensure_chat_attachment_columns(engine) -> None:
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "chat_attachments" not in table_names:
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("chat_attachments")}
+    statements: list[str] = []
+    if "trading_account_id" not in columns:
+        statements.append(
+            "ALTER TABLE chat_attachments ADD COLUMN trading_account_id INTEGER"
+        )
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+    index_names = {
+        index["name"]
+        for index in inspect(engine).get_indexes("chat_attachments")
+        if index.get("name")
+    }
+    if "ix_chat_attachments_trading_account_id" in index_names:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE INDEX ix_chat_attachments_trading_account_id "
+                "ON chat_attachments (trading_account_id)"
+            )
+        )
 
 
 def _ensure_strategy_schedule_columns(engine) -> None:

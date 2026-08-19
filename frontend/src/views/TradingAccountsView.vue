@@ -341,8 +341,8 @@
                         <UiToggle v-model="draft.tg_notify_trade_enabled" />
                       </div>
                       <div v-if="draft.tg_notify_trade_enabled" class="account-card__body space-y-4">
-                        <UiField label="Bot Token" help="从 @BotFather 获取的机器人令牌。">
-                          <input v-model="draft.tg_bot_token" type="password" autocomplete="off" class="field-input" placeholder="123456:ABC-DEF…" />
+                        <UiField label="Bot Token" help="从 @BotFather 获取的机器人令牌，明文展示方便复制。">
+                          <input v-model="draft.tg_bot_token" type="text" class="field-input font-mono text-footnote" placeholder="123456:ABC-DEF…" />
                         </UiField>
                         <UiField label="Chat ID" help="接收通知的会话 ID，支持群组或私人聊天。">
                           <input v-model="draft.tg_chat_id" type="text" class="field-input" placeholder="-1001234567890" />

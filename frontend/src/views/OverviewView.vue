@@ -25,6 +25,79 @@
       </div>
     </UiPageHeader>
 
+    <!-- 账户对比分析（多账户时展示） -->
+    <UiPanel
+      v-if="store.hasMultipleAccounts && accountComparison.length"
+      title="账户对比"
+      kicker="Account Comparison"
+    >
+      <template #actions>
+        <span class="text-footnote text-label-tertiary">点击任意账户行可切换查看明细</span>
+      </template>
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[920px] border-collapse text-left text-body">
+          <thead>
+            <tr class="border-b border-separator text-caption font-semibold uppercase tracking-wide text-label-tertiary">
+              <th class="px-3 py-3 font-semibold">账户</th>
+              <th class="px-3 py-3 text-right font-semibold">总资产</th>
+              <th class="px-3 py-3 text-right font-semibold">今日盈亏</th>
+              <th class="px-3 py-3 text-right font-semibold">累计盈亏</th>
+              <th class="px-3 py-3 text-right font-semibold">持仓数</th>
+              <th class="px-3 py-3 text-right font-semibold">仓位占比</th>
+              <th class="px-3 py-3 text-right font-semibold">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="item in accountComparison"
+              :key="item.accountId"
+              class="cursor-pointer border-b border-separator/70 transition-colors hover:bg-hover"
+              :class="item.accountId === store.selectedAccountId ? 'bg-accent-soft/40' : ''"
+              @click="store.selectAccount(item.accountId)"
+            >
+              <td class="px-3 py-3.5">
+                <div class="flex items-center gap-2">
+                  <span
+                    class="flex size-7 shrink-0 items-center justify-center rounded-[8px] text-footnote font-semibold"
+                    :class="item.accountId === store.selectedAccountId ? 'bg-accent text-on-accent' : 'bg-fill text-label-secondary'"
+                  >
+                    {{ item.accountName.slice(0, 1) }}
+                  </span>
+                  <span class="font-semibold text-label">{{ item.accountName }}</span>
+                  <span v-if="item.accountId === store.selectedAccountId" class="text-caption text-accent-text">当前</span>
+                </div>
+              </td>
+              <td class="px-3 py-3.5 text-right tabular-nums font-medium text-label">
+                {{ formatMoney(item.totalAssets) }}
+              </td>
+              <td class="px-3 py-3.5 text-right">
+                <div class="flex flex-col items-end gap-0.5">
+                  <span class="tabular-nums font-semibold" :class="profitClass(item.dailyProfit)">{{ formatSignedMoney(item.dailyProfit) }}</span>
+                  <span class="text-caption" :class="profitClass(item.dailyReturnRatio)">{{ formatPercent(item.dailyReturnRatio) }}</span>
+                </div>
+              </td>
+              <td class="px-3 py-3.5 text-right">
+                <div class="flex flex-col items-end gap-0.5">
+                  <span class="tabular-nums font-semibold" :class="profitClass(item.totalProfit)">{{ formatSignedMoney(item.totalProfit) }}</span>
+                  <span class="text-caption" :class="profitClass(item.totalReturnRatio)">{{ formatPercent(item.totalReturnRatio) }}</span>
+                </div>
+              </td>
+              <td class="px-3 py-3.5 text-right tabular-nums font-medium text-label">{{ item.positionCount }}</td>
+              <td class="px-3 py-3.5 text-right tabular-nums font-medium text-label">{{ formatPercent(item.positionRatio) }}</td>
+              <td class="px-3 py-3.5 text-right">
+                <span
+                  class="inline-flex rounded-pill px-2.5 py-0.5 text-[11px] font-semibold"
+                  :class="item.status === 'ok' ? 'bg-success-soft text-success-text' : 'bg-danger-soft text-danger-text'"
+                >
+                  {{ item.status === 'ok' ? '正常' : '异常' }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </UiPanel>
+
     <!-- 全局聚合（多账户时展示） -->
     <div v-if="store.hasMultipleAccounts && globalOverview" class="rounded-2xl border border-separator bg-card p-4 shadow-sm">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -485,38 +558,38 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useTradingAccountsStore } from '@/stores/tradingAccounts'
+import type { AccountOverview } from '@/types'
 import { formatMinuteTime, formatMoney, formatPercent, formatTime } from '@/utils/formatters'
 import UiButton from '@/components/ui/UiButton.vue'
 import UiEmpty from '@/components/ui/UiEmpty.vue'
 import UiPageHeader from '@/components/ui/UiPageHeader.vue'
 import UiPanel from '@/components/ui/UiPanel.vue'
 import UiStatCard from '@/components/ui/UiStatCard.vue'
-import { computed as vueComputed, ref, watch } from 'vue'
 
 const store = useTradingAccountsStore()
-const account = vueComputed(() => {
+const account = computed(() => {
   if (store.selectedAccountId === null) {
     return emptyOverview
   }
   const data = store.account(store.selectedAccountId)
   return data.overview ?? emptyOverview
 })
-const runtimeOverview = vueComputed(() => {
+const runtimeOverview = computed(() => {
   if (store.selectedAccountId === null) {
     return emptyRuntimeOverview
   }
   return store.account(store.selectedAccountId).runtimeOverview ?? emptyRuntimeOverview
 })
-const errorMessage = vueComputed(() => {
+const errorMessage = computed(() => {
   if (store.selectedAccountId === null) {
     return ''
   }
   return store.account(store.selectedAccountId).error
 })
-const accountRefreshing = vueComputed(() => {
+const accountRefreshing = computed(() => {
   if (store.selectedAccountId === null) {
     return false
   }
@@ -524,7 +597,37 @@ const accountRefreshing = vueComputed(() => {
 })
 const canManualRefreshAccount = ref(true)
 const accountRefreshCooldownText = ref('')
-const globalOverview = vueComputed(() => store.globalOverview)
+const globalOverview = computed(() => store.globalOverview)
+
+const accountComparison = computed(() => {
+  const overview = globalOverview.value
+  if (!overview) {
+    return []
+  }
+  return overview.accounts.map((item) => {
+    const o = item.overview ?? ({} as AccountOverview)
+    const totalAssets = o.total_assets ?? null
+    const initialCapital = o.initial_capital ?? null
+    const totalProfit = totalAssets != null && initialCapital != null
+      ? totalAssets - initialCapital
+      : null
+    const positionCount = (o.positions ?? []).filter(
+      (position) => (position.volume ?? 0) > 0,
+    ).length
+    return {
+      accountId: item.account_id,
+      accountName: item.account_name,
+      status: item.status,
+      totalAssets,
+      dailyProfit: o.daily_profit ?? null,
+      dailyReturnRatio: o.daily_return_ratio ?? null,
+      totalProfit,
+      totalReturnRatio: o.total_return_ratio ?? null,
+      positionCount,
+      positionRatio: o.total_position_ratio ?? null,
+    }
+  })
+})
 
 const globalRuntimeSections = computed(() => {
   const runtime = globalOverview.value?.runtime

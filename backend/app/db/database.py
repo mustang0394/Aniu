@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -57,6 +57,7 @@ def init_db() -> None:
     _ensure_uzi_report_job_indexes(engine)
     _backfill_schedule_run_types(engine)
     _backfill_strategy_run_types(engine)
+    _backfill_strategy_run_metrics(engine)
     _backfill_default_trading_account(engine)
     _backfill_uzi_mx_api_key(engine)
     _backfill_schedule_accounts(engine)
@@ -444,6 +445,38 @@ def _backfill_strategy_run_types(engine) -> None:
         connection.close()
 
 
+def _backfill_strategy_run_metrics(engine) -> None:
+    """一次性回填 strategy_runs 的预计算汇总指标。
+
+    仅处理 api_call_count IS NULL 的行，后续启动直接跳过（与
+    _backfill_strategy_run_types 不同，不做全表扫）。复用 aniu_service
+    的现成计算逻辑，避免在两处重复实现。
+    """
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "strategy_runs" not in table_names:
+        return
+    columns = {column["name"] for column in inspector.get_columns("strategy_runs")}
+    if "api_call_count" not in columns:
+        return
+
+    # 延迟导入避免 database <-> aniu_service 循环导入
+    from app.db.models import StrategyRun
+    from app.services.aniu_service import aniu_service
+
+    with session_scope() as db:
+        rows = list(
+            db.scalars(
+                select(StrategyRun).where(StrategyRun.api_call_count.is_(None))
+            ).all()
+        )
+        if not rows:
+            return
+        for run in rows:
+            aniu_service.compute_run_summary_metrics(run)
+            db.add(run)
+
+
 def _ensure_strategy_run_columns(engine) -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
@@ -464,6 +497,11 @@ def _ensure_strategy_run_columns(engine) -> None:
         "response_message_id": "ALTER TABLE strategy_runs ADD COLUMN response_message_id INTEGER",
         "context_summary_version": "ALTER TABLE strategy_runs ADD COLUMN context_summary_version INTEGER",
         "context_tokens_estimate": "ALTER TABLE strategy_runs ADD COLUMN context_tokens_estimate INTEGER",
+        "api_call_count": "ALTER TABLE strategy_runs ADD COLUMN api_call_count INTEGER",
+        "executed_trade_count": "ALTER TABLE strategy_runs ADD COLUMN executed_trade_count INTEGER",
+        "input_tokens": "ALTER TABLE strategy_runs ADD COLUMN input_tokens INTEGER",
+        "output_tokens": "ALTER TABLE strategy_runs ADD COLUMN output_tokens INTEGER",
+        "total_tokens": "ALTER TABLE strategy_runs ADD COLUMN total_tokens INTEGER",
     }
 
     with engine.begin() as connection:

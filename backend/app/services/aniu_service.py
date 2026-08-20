@@ -16,7 +16,7 @@ from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, defer, selectinload
 
 from app.core.auth import create_access_token
 from app.core.config import get_settings
@@ -309,6 +309,24 @@ class AniuService:
 
         return "analysis"
 
+    def _infer_run_type_lite(self, run: StrategyRun) -> str:
+        """列表路径轻量推断：不访问 trade_orders 关系、不解码 payload。
+
+        仅依赖 schedule_name 启发式与持久化列（executed_trade_count / run_type）。
+        正常路径下 run_type 已在创建时写入，这里只做历史空值兑底。
+        """
+        schedule_name = str(run.schedule_name or "").strip()
+        if schedule_name in ANALYSIS_TASK_NAMES:
+            return "analysis"
+        if schedule_name.startswith("上午运行") or schedule_name.startswith("下午运行"):
+            return "trade"
+        if int(run.executed_trade_count or 0) > 0:
+            return "trade"
+        stored_run_type = str(run.run_type or "").strip()
+        if stored_run_type in {"trade", "analysis"}:
+            return stored_run_type
+        return "analysis"
+
     def authenticate_login(self, password: str) -> dict[str, Any]:
         settings = get_settings()
         expected_password = settings.app_login_password
@@ -501,8 +519,18 @@ class AniuService:
         account_id: int | None = None,
     ) -> list[StrategyRun]:
         resolved_account_id = self._resolve_account_id(db, account_id)
-        stmt = select(StrategyRun).where(
-            StrategyRun.trading_account_id == resolved_account_id
+        stmt = (
+            select(StrategyRun)
+            .where(StrategyRun.trading_account_id == resolved_account_id)
+            # 列表响应只用轻量列；延迟加载超大的 JSON/Text 字段，避免逐行 json.loads
+            .options(
+                defer(StrategyRun.llm_request_payload),
+                defer(StrategyRun.llm_response_payload),
+                defer(StrategyRun.skill_payloads),
+                defer(StrategyRun.decision_payload),
+                defer(StrategyRun.executed_actions),
+                defer(StrategyRun.final_answer),
+            )
         )
 
         if run_date is not None:
@@ -583,7 +611,12 @@ class AniuService:
                 StrategyRun.id == run_id,
                 StrategyRun.trading_account_id == resolved_account_id,
             )
-            .options(selectinload(StrategyRun.trade_orders))
+            .options(
+                selectinload(StrategyRun.trade_orders),
+                # 详情响应不再返回这两个最大列；指标已持久化，无需解码
+                defer(StrategyRun.llm_request_payload),
+                defer(StrategyRun.llm_response_payload),
+            )
         )
         run = db.scalar(stmt)
         if run is not None:
@@ -748,12 +781,24 @@ class AniuService:
     ) -> None:
         run.started_at = _assume_utc(run.started_at)
         run.finished_at = _assume_utc(run.finished_at)
-        run.run_type = self._infer_run_type(run)
-        self._hydrate_run_summary_metrics(run)
         if include_display_fields:
+            # 详情/单 run 路径：run_type 仍按实际行为推断；指标优先用持久化值，
+            # 仅在老行未回填时从 payload 现算兑底（此时 payload 已加载）。
+            run.run_type = self._infer_run_type(run)
+            if run.api_call_count is None:
+                self._hydrate_run_summary_metrics(run)
             self._hydrate_run_display_fields(run)
             for order in run.trade_orders:
                 order.created_at = _assume_utc(order.created_at)
+        else:
+            # 列表路径：信任持久化 run_type 与汇总指标，不再触碰 trade_orders 关系
+            # （消除 N+1）也不再解码超大 payload。run_type 缺省时仅用轻量兑底。
+            # 兑底：未走完成路径/未回填的 run（api_call_count 为空）才现算指标，
+            # 生产中回填 + 完成路径已填满，此分支几乎不触发。
+            if run.api_call_count is None:
+                self._hydrate_run_summary_metrics(run)
+            if not str(run.run_type or "").strip():
+                run.run_type = self._infer_run_type_lite(run)
 
     def _hydrate_run_summary_metrics(self, run: StrategyRun) -> None:
         token_usage = self._get_run_token_usage(run)
@@ -762,6 +807,14 @@ class AniuService:
         run.input_tokens = token_usage["input"]
         run.output_tokens = token_usage["output"]
         run.total_tokens = token_usage["total"]
+
+    def compute_run_summary_metrics(self, run: StrategyRun) -> None:
+        """计算并写入 run 的汇总指标到实例属性（不涉及 DB 写入）。
+
+        run 完成时与历史回填复用此入口，避免列表查询路径为每行反序列化
+        超大的 llm_*_payload / skill_payloads 等 JSON 列。
+        """
+        self._hydrate_run_summary_metrics(run)
 
     def _hydrate_run_display_fields(self, run: StrategyRun) -> None:
         run.output_markdown = (
@@ -2353,6 +2406,8 @@ class AniuService:
                     str(decision.get("final_answer") or "").strip() or None
                 )
                 run.executed_actions = executed_actions
+                # 预计算汇总指标并落盘，列表查询无需再反序列化超大 payload
+                self.compute_run_summary_metrics(run)
                 run.status = "completed"
                 run.finished_at = completed_at
                 db.add(run)
@@ -2569,6 +2624,8 @@ class AniuService:
                             exc, "freshness", None
                         )
                         run.skill_payloads = failure_skill_payloads
+                    # 失败也尽力写入汇总指标（payload 缺失则置 0/null）
+                    self.compute_run_summary_metrics(run)
                     db.add(run)
                     if session_context is not None:
                         session = db.get(ChatSession, session_context.session_id)

@@ -61,11 +61,6 @@ export interface RunDetail extends RunSummary {
   api_details: ApiDetail[]
   raw_tool_previews: RawToolPreview[]
   trade_details: TradeDetail[]
-  decision_payload: Record<string, unknown> | null
-  executed_actions: Array<Record<string, unknown>> | null
-  llm_request_payload: Record<string, unknown> | null
-  llm_response_payload: Record<string, unknown> | null
-  skill_payloads: Record<string, unknown> | null
   trade_orders: TradeOrder[]
 }
 

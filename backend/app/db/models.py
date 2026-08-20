@@ -238,6 +238,14 @@ class StrategyRun(Base):
     executed_actions: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON, nullable=True
     )
+    # 预计算汇总指标（run 完成时写入；老行由 _backfill_strategy_run_metrics 回填）。
+    # 列表查询直接读这些列，避免为每行反序列化超大的 llm_*_payload / skill_payloads。
+    api_call_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    executed_trade_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     started_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), index=True
     )

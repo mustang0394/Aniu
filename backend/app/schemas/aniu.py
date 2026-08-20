@@ -346,11 +346,6 @@ class RunDetailRead(RunSummaryRead):
     api_details: list[ApiDetailRead] = Field(default_factory=list)
     raw_tool_previews: list[RawToolPreviewRead] = Field(default_factory=list)
     trade_details: list[TradeDetailRead] = Field(default_factory=list)
-    decision_payload: dict[str, Any] | None = None
-    executed_actions: list[dict[str, Any]] | None = None
-    llm_request_payload: dict[str, Any] | None = None
-    llm_response_payload: dict[str, Any] | None = None
-    skill_payloads: dict[str, Any] | None = None
     trade_orders: list[TradeOrderRead] = Field(default_factory=list)
 
 

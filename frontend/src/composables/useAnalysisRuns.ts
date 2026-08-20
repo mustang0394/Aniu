@@ -29,17 +29,11 @@ function formatTokenValue(value: number | null | undefined) {
 }
 
 function getTokenUsage(detail: RunDetail) {
-  const responseUsage = extractUsage(detail.llm_response_payload)
-  const requestUsage = extractUsage(detail.llm_request_payload)
-
-  const promptTokens = Number(responseUsage?.prompt_tokens ?? requestUsage?.prompt_tokens ?? 0)
-  const completionTokens = Number(responseUsage?.completion_tokens ?? requestUsage?.completion_tokens ?? 0)
-  const totalTokens = Number(responseUsage?.total_tokens ?? requestUsage?.total_tokens ?? promptTokens + completionTokens)
-
+  // 后端已预计算并持久化 token 用量，前端不再反序列化超大 payload
   return {
-    input: promptTokens > 0 ? String(promptTokens) : '--',
-    output: completionTokens > 0 ? String(completionTokens) : '--',
-    total: totalTokens > 0 ? String(totalTokens) : '--',
+    input: formatTokenValue(detail.input_tokens),
+    output: formatTokenValue(detail.output_tokens),
+    total: formatTokenValue(detail.total_tokens),
   }
 }
 
@@ -65,49 +59,6 @@ function getRunTypeText(detail: Pick<RunDetail, 'run_type' | 'trigger_source'>) 
   if (detail.run_type === 'analysis') return '分析任务'
   if (detail.trigger_source === 'manual') return '手动运行'
   return '任务运行'
-}
-
-function extractUsage(payload: unknown): Record<string, unknown> | undefined {
-  if (!payload || typeof payload !== 'object') {
-    return undefined
-  }
-
-  const directUsage = (payload as { usage?: Record<string, unknown> }).usage
-  if (directUsage && typeof directUsage === 'object') {
-    return directUsage
-  }
-
-  const responses = (payload as { responses?: unknown[] }).responses
-  if (Array.isArray(responses)) {
-    for (let index = responses.length - 1; index >= 0; index -= 1) {
-      const item = responses[index]
-      if (!item || typeof item !== 'object') {
-        continue
-      }
-      const usage = (item as { usage?: Record<string, unknown> }).usage
-      if (usage && typeof usage === 'object') {
-        return usage
-      }
-    }
-  }
-
-  return undefined
-}
-
-function getApiToolText(name: string) {
-  const mapping: Record<string, { label: string, summary: string }> = {
-    mx_get_positions: { label: '获取持仓', summary: '读取当前账户持仓与仓位分布。' },
-    mx_get_balance: { label: '获取资产', summary: '读取账户总资产、现金和收益情况。' },
-    mx_get_orders: { label: '获取委托', summary: '读取近期委托和成交记录，用于判断交易状态。' },
-    mx_get_self_selects: { label: '获取自选', summary: '读取当前自选股列表，辅助观察候选标的。' },
-    mx_query_market: { label: '查询行情', summary: '获取目标股票的实时行情和基础市场数据。' },
-    mx_search_news: { label: '搜索资讯', summary: '查询相关新闻或公告，辅助判断市场事件影响。' },
-    mx_screen_stocks: { label: '筛选股票', summary: '按条件筛选候选标的，缩小分析范围。' },
-    mx_manage_self_select: { label: '管理自选', summary: '增删自选股，维护后续关注列表。' },
-    mx_moni_trade: { label: '提交模拟交易', summary: '向模拟交易系统提交买入或卖出指令。' },
-    mx_moni_cancel: { label: '撤销委托', summary: '撤销尚未完成的模拟委托单。' },
-  }
-  return mapping[name] ?? { label: name || '未命名调用', summary: '执行一次系统或妙想工具调用。' }
 }
 
 function extractTradeName(payload: unknown) {
@@ -149,42 +100,6 @@ function getTradeSummary(action: 'buy' | 'sell', symbol: string, name: string, v
   return `挂单${actionText}${displaySymbol}共计${volume}股。`
 }
 
-function mapApiDetails(detail: RunDetail): ApiDetail[] {
-  const tradeToolNames = new Set(['mx_moni_trade', 'mx_moni_cancel'])
-  const skillPayloads = detail.skill_payloads && typeof detail.skill_payloads === 'object'
-    ? detail.skill_payloads
-    : null
-  const decisionPayload = detail.decision_payload && typeof detail.decision_payload === 'object'
-    ? detail.decision_payload
-    : null
-
-  const toolCalls = Array.isArray(skillPayloads?.tool_calls)
-    ? skillPayloads?.tool_calls
-    : Array.isArray(decisionPayload?.tool_calls)
-      ? decisionPayload?.tool_calls
-      : []
-
-  return toolCalls
-    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-    .filter((item) => !tradeToolNames.has(String(item.name ?? '')))
-    .map((item, idx) => {
-      const toolText = getApiToolText(String(item.name ?? ''))
-      const result = item.result && typeof item.result === 'object'
-        ? item.result as Record<string, unknown>
-        : null
-      const ok = typeof result?.ok === 'boolean' ? result.ok : null
-      return {
-        tool_name: String(item.name ?? ''),
-        name: toolText.label,
-        summary: toolText.summary,
-        preview_index: idx,
-        tool_call_id: typeof item.id === 'string' ? item.id : null,
-        status: ok === false ? 'failed' : 'done',
-        ok,
-      }
-    })
-}
-
 function resolveTradeDetailStatus(value: unknown): 'done' | 'failed' {
   const text = String(value ?? '').trim().toLowerCase()
   if (text && ['fail', 'error', 'reject'].some((flag) => text.includes(flag))) {
@@ -193,57 +108,28 @@ function resolveTradeDetailStatus(value: unknown): 'done' | 'failed' {
   return 'done'
 }
 
-function mapTradeDetails(tradeOrders: TradeOrder[], executedActions: Array<Record<string, unknown>> | null): TradeDetail[] {
-  if (tradeOrders.length > 0) {
-    return tradeOrders.map((order) => {
-      const price = order.price
-      const action = String(order.action).toUpperCase() === 'SELL' ? 'sell' : 'buy'
-      const name = extractTradeName(order.response_payload) || order.symbol
-      const amount = price == null ? null : Number((price * order.quantity).toFixed(2))
-      const status = resolveTradeDetailStatus(order.status)
-      return {
-        action,
-        action_text: action === 'sell' ? '模拟卖出' : '模拟买入',
-        symbol: order.symbol,
-        name,
-        volume: order.quantity,
-        price,
-        amount,
-        summary: getTradeSummary(action, order.symbol, name, order.quantity, price, amount),
-        tool_name: null,
-        preview_index: null,
-        status,
-        ok: status !== 'failed',
-      }
-    })
-  }
-
-  return (executedActions ?? [])
-    .filter((action) => ['BUY', 'SELL'].includes(String(action.action ?? '').toUpperCase()))
-    .map((action) => {
-    const actionName = String(action.action ?? '').toUpperCase()
-    const actionType = actionName === 'SELL' ? 'sell' : 'buy'
-    const price = action.price == null ? null : Number(action.price)
-    const volume = Number(action.quantity ?? 0)
-    const symbol = String(action.symbol ?? '--')
-    const name = String(action.name ?? '').trim() || symbol
-    const amount = price == null ? null : Number((price * volume).toFixed(2))
-    const status = resolveTradeDetailStatus(action.status)
+function mapTradeDetails(tradeOrders: TradeOrder[]): TradeDetail[] {
+  return tradeOrders.map((order) => {
+    const price = order.price
+    const action = String(order.action).toUpperCase() === 'SELL' ? 'sell' : 'buy'
+    const name = extractTradeName(order.response_payload) || order.symbol
+    const amount = price == null ? null : Number((price * order.quantity).toFixed(2))
+    const status = resolveTradeDetailStatus(order.status)
     return {
-      action: actionType,
-      action_text: actionName === 'SELL' ? '模拟卖出' : '模拟买入',
-      symbol,
+      action,
+      action_text: action === 'sell' ? '模拟卖出' : '模拟买入',
+      symbol: order.symbol,
       name,
-      volume,
+      volume: order.quantity,
       price,
       amount,
-      summary: getTradeSummary(actionType, symbol, name, volume, price, amount),
+      summary: getTradeSummary(action, order.symbol, name, order.quantity, price, amount),
       tool_name: null,
       preview_index: null,
       status,
       ok: status !== 'failed',
     }
-    })
+  })
 }
 
 function mapRunSummaryToViewModel(summary: RunSummary): AnalysisRunViewModel {
@@ -270,9 +156,9 @@ function mapRunSummaryToViewModel(summary: RunSummary): AnalysisRunViewModel {
 
 function mapRunDetailToViewModel(detail: RunDetail): AnalysisRunViewModel {
   const tokenUsage = getTokenUsage(detail)
-  const apiDetails = detail.api_details?.length ? detail.api_details : mapApiDetails(detail)
+  const apiDetails = Array.isArray(detail.api_details) ? detail.api_details : []
   const rawToolPreviews = Array.isArray(detail.raw_tool_previews) ? detail.raw_tool_previews : []
-  const tradeDetails = detail.trade_details?.length ? detail.trade_details : mapTradeDetails(detail.trade_orders, detail.executed_actions)
+  const tradeDetails = detail.trade_details?.length ? detail.trade_details : mapTradeDetails(detail.trade_orders)
   const output = detail.output_markdown || detail.final_answer || detail.analysis_summary || detail.error_message || '暂无分析输出'
 
   return {

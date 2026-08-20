@@ -8,15 +8,15 @@ import secrets
 import time
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-
-from app.db.models import AppSettings, TradingAccount
+from app.db.models import AppSettings, StrategyRun, TradingAccount
 from app.schemas.accounts import (
     AccountLlmTestResult,
     AccountMxTestResult,
     AccountSkillListRead,
     AccountSkillStatus,
+    LatestRunSummary,
     TradingAccountCreate,
     TradingAccountRead,
     TradingAccountUpdate,
@@ -51,6 +51,77 @@ class AccountService:
         if account is None:
             raise LookupError("交易账户不存在。")
         return account
+
+    def list_latest_runs(
+        self, db: Session, account_ids: list[int]
+    ) -> dict[int, LatestRunSummary]:
+        """取每个账户最近一条 StrategyRun（窗口函数，单条查询）。
+
+        纯 DB 查询，不触发远程妙想调用；账户无运行时不在返回 dict 中。
+        """
+        if not account_ids:
+            return {}
+        rn = func.row_number().over(
+            partition_by=StrategyRun.trading_account_id,
+            order_by=StrategyRun.started_at.desc(),
+        ).label("rn")
+        subq = (
+            select(
+                StrategyRun.id.label("run_id"),
+                StrategyRun.trading_account_id.label("account_id"),
+                StrategyRun.run_type.label("run_type"),
+                StrategyRun.status.label("status"),
+                StrategyRun.trigger_source.label("trigger_source"),
+                StrategyRun.schedule_name.label("schedule_name"),
+                StrategyRun.started_at.label("started_at"),
+                StrategyRun.finished_at.label("finished_at"),
+                StrategyRun.error_message.label("error_message"),
+                rn,
+            )
+            .where(StrategyRun.trading_account_id.in_(account_ids))
+            .subquery()
+        )
+        rows = db.execute(
+            select(
+                subq.c.account_id,
+                subq.c.run_id,
+                subq.c.run_type,
+                subq.c.status,
+                subq.c.trigger_source,
+                subq.c.schedule_name,
+                subq.c.started_at,
+                subq.c.finished_at,
+                subq.c.error_message,
+            )
+            .where(subq.c.rn == 1)
+        ).all()
+        result: dict[int, LatestRunSummary] = {}
+        for row in rows:
+            account_id = row.account_id
+            if account_id is None:
+                continue
+            result[int(account_id)] = LatestRunSummary(
+                id=int(row.run_id),
+                run_type=row.run_type or "analysis",
+                status=row.status or "pending",
+                trigger_source=row.trigger_source,
+                schedule_name=row.schedule_name,
+                started_at=row.started_at,
+                finished_at=row.finished_at,
+                executed_trade_count=0,
+                error_message=row.error_message,
+            )
+        return result
+
+    def list_accounts_with_latest_run(
+        self, db: Session, *, include_archived: bool = False
+    ) -> list[TradingAccountRead]:
+        """列账户并嵌入最近一次运行摘要（纯 DB，零远程调用）。"""
+        accounts = self.list_accounts(db, include_archived=include_archived)
+        if not accounts:
+            return []
+        latest = self.list_latest_runs(db, [a.id for a in accounts if a.id is not None])
+        return [self.to_read(db, account, latest_run=latest.get(account.id)) for account in accounts]
 
     def count_active_accounts(self, db: Session) -> int:
         return len(self.list_accounts(db, include_archived=False))
@@ -343,7 +414,13 @@ class AccountService:
 
     # ── 序列化 ───────────────────────────────────────────────────────────
 
-    def to_read(self, db: Session, account: TradingAccount) -> TradingAccountRead:
+    def to_read(
+        self,
+        db: Session,
+        account: TradingAccount,
+        *,
+        latest_run: LatestRunSummary | None = None,
+    ) -> TradingAccountRead:
         settings = db.scalar(select(AppSettings).order_by(AppSettings.id).limit(1))
         has_account_llm = bool(
             str(account.llm_base_url or "").strip()
@@ -418,6 +495,7 @@ class AccountService:
             ),
             created_at=account.created_at,
             updated_at=account.updated_at,
+            latest_run=latest_run,
         )
 
 

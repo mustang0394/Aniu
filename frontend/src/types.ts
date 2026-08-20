@@ -529,6 +529,18 @@ export interface CreateUziReportResponse {
 
 // ── 多账户（多妙想 Key） ────────────────────────────────────────────────
 
+export interface LatestRunSummary {
+  id: number
+  run_type: 'analysis' | 'trade' | 'chat' | string
+  status: string
+  trigger_source: string | null
+  schedule_name: string | null
+  started_at: string
+  finished_at: string | null
+  executed_trade_count: number
+  error_message: string | null
+}
+
 export interface TradingAccount {
   id: number
   name: string
@@ -548,6 +560,7 @@ export interface TradingAccount {
   llm_enable_reasoning_content_echo: boolean
   has_account_llm_config: boolean
   resolved_llm_source: 'account' | 'global' | 'none'
+  latest_run: LatestRunSummary | null
   system_prompt: string
   analyst_prompt: string
   market_query: string

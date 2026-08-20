@@ -166,6 +166,20 @@ class TradingAccountUpdate(BaseModel):
         return payload
 
 
+class LatestRunSummary(BaseModel):
+    """账户最近一次运行的轻量摘要（查询期计算，不入库）。"""
+
+    id: int
+    run_type: str
+    status: str
+    trigger_source: str | None = None
+    schedule_name: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    executed_trade_count: int = 0
+    error_message: str | None = None
+
+
 class TradingAccountRead(TradingAccountBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -177,6 +191,7 @@ class TradingAccountRead(TradingAccountBase):
     has_mx_api_key: bool = False
     has_account_llm_config: bool = False
     resolved_llm_source: Literal["account", "global", "none"] = "none"
+    latest_run: LatestRunSummary | None = None
     disabled_skill_ids: list[str] = Field(default_factory=list)
     automation_context_window_tokens: int = 128000
     automation_recent_message_limit: int = 24

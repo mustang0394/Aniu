@@ -61,8 +61,7 @@ def list_accounts(
     db: Session = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> list[TradingAccountRead]:
-    accounts = account_service.list_accounts(db, include_archived=include_archived)
-    return [account_service.to_read(db, account) for account in accounts]
+    return account_service.list_accounts_with_latest_run(db, include_archived=include_archived)
 
 
 @router.post("/accounts", response_model=TradingAccountRead, status_code=201)
